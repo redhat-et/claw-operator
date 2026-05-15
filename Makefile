@@ -1,7 +1,20 @@
 # Image URL to use all building/pushing image targets
 IMG ?= claw-operator:latest
 PROXY_IMG ?= claw-proxy:latest
+KUBECTL_IMG ?= quay.io/openshift/origin-cli:4.21
+BUNDLE_IMG ?= claw-operator-bundle:v$(VERSION)
+CATALOG_IMG ?= claw-operator-catalog:latest
 PLATFORM ?= linux/amd64
+
+# OLM bundle configuration
+VERSION ?= 0.0.0
+CHANNELS ?= staging
+DEFAULT_CHANNEL ?= staging
+BUNDLE_METADATA_OPTS ?= --channels=$(CHANNELS) --default-channel=$(DEFAULT_CHANNEL)
+
+# OS/Arch for downloading binary tools
+OS = $(shell go env GOOS)
+ARCH = $(shell go env GOARCH)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -67,11 +80,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 KIND_CLUSTER ?= claw-operator-test-e2e
 
 .PHONY: setup-test-e2e
-setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
-	@command -v $(KIND) >/dev/null 2>&1 || { \
-		echo "Kind is not installed. Please install Kind manually."; \
-		exit 1; \
-	}
+setup-test-e2e: kind ## Set up a Kind cluster for e2e tests if it does not exist
 	@case "$$($(KIND) get clusters)" in \
 		*"$(KIND_CLUSTER)"*) \
 			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
@@ -170,8 +179,18 @@ container-push-proxy: ## Push container image for the credential proxy.
 # pull-policy defaults to IfNotPresent; dev-deploy passes Always to force re-pulls.
 define generate-deploy-overlay
 	@rm -rf config/.deploy && mkdir -p config/.deploy
-	@printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n- ../default\nimages:\n- name: controller\n  newName: $(shell echo $(1) | cut -d: -f1)\n  newTag: $(shell echo $(1) | cut -d: -f2)\npatches:\n- path: proxy_image_patch.yaml\n  target:\n    kind: Deployment\n' > config/.deploy/kustomization.yaml
+	@img=$(1); printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n- ../default\nimages:\n- name: controller\n  newName: %s\n  newTag: %s\npatches:\n- path: proxy_image_patch.yaml\n  target:\n    kind: Deployment\n' "$${img%:*}" "$${img##*:}" > config/.deploy/kustomization.yaml
 	@printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: controller-manager\nspec:\n  template:\n    spec:\n      containers:\n      - name: manager\n        imagePullPolicy: $(or $(3),IfNotPresent)\n        env:\n        - name: PROXY_IMAGE\n          value: "$(2)"\n        - name: IMAGE_PULL_POLICY\n          value: "$(or $(3),)"\n' > config/.deploy/proxy_image_patch.yaml
+endef
+
+# generate-bundle-overlay creates a temporary kustomize overlay at config/.bundle/
+# that wraps config/manifests with an image override for the controller.
+# This avoids mutating config/manager/kustomization.yaml (which would break deploy targets).
+# Usage: $(call generate-bundle-overlay,<controller-image>)
+define generate-bundle-overlay
+	@rm -rf config/.bundle && mkdir -p config/.bundle
+	@img=$(1); printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n- ../manifests\nimages:\n- name: controller\n  newName: %s\n  newTag: %s\n' \
+		"$${img%:*}" "$${img##*:}" > config/.bundle/kustomization.yaml
 endef
 
 ##@ Deployment
@@ -288,6 +307,94 @@ dev-cleanup: ## Remove deployed controller and CRDs.
 	$(MAKE) undeploy ignore-not-found=true
 	$(MAKE) uninstall ignore-not-found=true
 
+##@ OLM Bundle
+
+BUNDLE_CSV = bundle/manifests/claw-operator.clusterserviceversion.yaml
+
+.PHONY: bundle
+bundle: manifests kustomize operator-sdk ## Generate OLM bundle manifests and validate.
+	$(OPERATOR_SDK) generate kustomize manifests -q
+	$(call generate-bundle-overlay,$(IMG))
+	trap 'rm -rf config/.bundle' EXIT; \
+		$(KUSTOMIZE) build config/.bundle | $(OPERATOR_SDK) generate bundle -q --overwrite \
+			--version $(VERSION) $(BUNDLE_METADATA_OPTS)
+	sed -i 's|image: $(IMG)|image: REPLACE_IMAGE|' $(BUNDLE_CSV)
+	sed -i 's|value: $(PROXY_IMG)|value: REPLACE_PROXY_IMAGE|' $(BUNDLE_CSV)
+	sed -i 's|value: $(KUBECTL_IMG)|value: REPLACE_KUBECTL_IMAGE|' $(BUNDLE_CSV)
+	sed -i 's|^    createdAt: .*|    createdAt: "REPLACE_CREATED_AT"|' $(BUNDLE_CSV)
+	sed -i 's|^  version: \(.*\)|  relatedImages:\n  - image: REPLACE_IMAGE\n    name: manager\n  - image: REPLACE_PROXY_IMAGE\n    name: proxy\n  - image: REPLACE_KUBECTL_IMAGE\n    name: kubectl\n  version: \1|' $(BUNDLE_CSV)
+	$(OPERATOR_SDK) bundle validate ./bundle
+
+.PHONY: bundle-build
+bundle-build: ## Build the OLM bundle image.
+	$(CONTAINER_TOOL) build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+
+.PHONY: bundle-push
+bundle-push: ## Push the OLM bundle image.
+	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
+
+.PHONY: clean-bundle
+clean-bundle: ## Remove the generated bundle directory.
+	rm -rf bundle/
+
+##@ CD Pipeline
+
+QUAY_NAMESPACE ?= codeready-toolchain
+OPERATOR_REPO = quay.io/$(QUAY_NAMESPACE)/claw-operator
+PROXY_REPO = quay.io/$(QUAY_NAMESPACE)/claw-proxy
+BUNDLE_REPO = quay.io/$(QUAY_NAMESPACE)/claw-operator-bundle
+CATALOG_REPO = quay.io/$(QUAY_NAMESPACE)/claw-operator-catalog
+OPM_CATALOG_BASE_IMG ?= quay.io/operator-framework/opm:$(OPM_VERSION)
+
+# Commit-count based versioning (lazily evaluated, only computed when CD targets run)
+GIT_COMMIT_COUNT = $(shell git rev-list --count HEAD)
+GIT_SHORT_SHA = $(shell git rev-parse --short HEAD)
+CD_VERSION = 0.0.$(GIT_COMMIT_COUNT)-commit-$(GIT_SHORT_SHA)
+
+.PHONY: push-to-quay-staging
+push-to-quay-staging: generate-cd-release-manifests ## Build and push bundle + catalog images for staging channel.
+	$(MAKE) bundle-build BUNDLE_IMG=$(BUNDLE_REPO):v$(CD_VERSION)
+	$(MAKE) bundle-push BUNDLE_IMG=$(BUNDLE_REPO):v$(CD_VERSION)
+	rm -rf catalog/ && mkdir -p catalog/claw-operator
+	$(OPM) render $(BUNDLE_REPO):v$(CD_VERSION) -o yaml > catalog/claw-operator/bundle.yaml
+	@printf -- '---\nschema: olm.package\nname: claw-operator\ndefaultChannel: staging\n---\nschema: olm.channel\npackage: claw-operator\nname: staging\nentries:\n- name: claw-operator.v$(CD_VERSION)\n  skipRange: ">=0.0.0 <$(CD_VERSION)"\n' \
+		> catalog/claw-operator/index.yaml
+	$(MAKE) build-and-push-catalog CATALOG_IMG=$(CATALOG_REPO):latest
+
+.PHONY: generate-cd-release-manifests
+generate-cd-release-manifests: opm ## Generate bundle with CD version, images, and upgrade metadata.
+	$(MAKE) bundle IMG=$(OPERATOR_REPO):$(GIT_SHORT_SHA) VERSION=$(CD_VERSION)
+	@echo "Patching CSV for staging release $(CD_VERSION)..."
+	sed -i 's|REPLACE_IMAGE|$(OPERATOR_REPO):$(GIT_SHORT_SHA)|g' $(BUNDLE_CSV)
+	sed -i 's|REPLACE_PROXY_IMAGE|$(PROXY_REPO):$(GIT_SHORT_SHA)|g' $(BUNDLE_CSV)
+	sed -i 's|REPLACE_KUBECTL_IMAGE|$(KUBECTL_IMG)|g' $(BUNDLE_CSV)
+	sed -i 's|REPLACE_CREATED_AT|$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")|' $(BUNDLE_CSV)
+	sed -i '/^    createdAt:/a\    olm.skipRange: ">=0.0.0 <$(CD_VERSION)"' $(BUNDLE_CSV)
+
+.PHONY: build-and-push-catalog
+build-and-push-catalog: opm ## Validate, build, and push FBC catalog image from catalog/ directory.
+	$(OPM) validate catalog/
+	printf 'FROM $(OPM_CATALOG_BASE_IMG)\nCOPY catalog /configs\nLABEL operators.operatorframework.io.index.configs.v1=/configs\nENTRYPOINT ["/bin/opm"]\nCMD ["serve", "/configs", "--cache-dir=/tmp/cache"]\n' | \
+		$(CONTAINER_TOOL) build -f - -t $(CATALOG_IMG) .
+	$(CONTAINER_TOOL) push $(CATALOG_IMG)
+	rm -rf catalog/
+
+.PHONY: publish-current-bundle
+publish-current-bundle: opm ## One-shot publish for testing OLM install (alpha channel, no replaces). Requires IMG and PROXY_IMG.
+	$(MAKE) bundle VERSION=$(CD_VERSION) CHANNELS=alpha DEFAULT_CHANNEL=alpha
+	@echo "Patching CSV for alpha release $(CD_VERSION)..."
+	sed -i 's|REPLACE_IMAGE|$(IMG)|g' $(BUNDLE_CSV)
+	sed -i 's|REPLACE_PROXY_IMAGE|$(PROXY_IMG)|g' $(BUNDLE_CSV)
+	sed -i 's|REPLACE_KUBECTL_IMAGE|$(KUBECTL_IMG)|g' $(BUNDLE_CSV)
+	sed -i 's|REPLACE_CREATED_AT|$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")|' $(BUNDLE_CSV)
+	$(MAKE) bundle-build BUNDLE_IMG=$(BUNDLE_REPO):v$(CD_VERSION)
+	$(MAKE) bundle-push BUNDLE_IMG=$(BUNDLE_REPO):v$(CD_VERSION)
+	rm -rf catalog/ && mkdir -p catalog/claw-operator
+	$(OPM) render $(BUNDLE_REPO):v$(CD_VERSION) -o yaml > catalog/claw-operator/bundle.yaml
+	@printf -- '---\nschema: olm.package\nname: claw-operator\ndefaultChannel: alpha\n---\nschema: olm.channel\npackage: claw-operator\nname: alpha\nentries:\n- name: claw-operator.v$(CD_VERSION)\n' \
+		> catalog/claw-operator/index.yaml
+	$(MAKE) build-and-push-catalog
+
 ##@ Dependencies
 
 ## Location to install dependencies to
@@ -297,11 +404,13 @@ $(LOCALBIN):
 
 ## Tool Binaries
 KUBECTL ?= kubectl
-KIND ?= kind
+KIND ?= $(LOCALBIN)/kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
+OPM ?= $(LOCALBIN)/opm
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.6.0
@@ -311,6 +420,9 @@ ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller
 #ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 GOLANGCI_LINT_VERSION ?= v2.11.4
+OPERATOR_SDK_VERSION ?= v1.42.0
+OPM_VERSION ?= v1.59.0
+KIND_VERSION ?= v0.31.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -339,6 +451,38 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: operator-sdk
+operator-sdk: $(OPERATOR_SDK) ## Download operator-sdk locally if necessary.
+$(OPERATOR_SDK): $(LOCALBIN)
+	$(call download-tool,$(OPERATOR_SDK),$(OPERATOR_SDK_VERSION),\
+		https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$(OS)_$(ARCH))
+
+.PHONY: opm
+opm: $(OPM) ## Download opm locally if necessary.
+$(OPM): $(LOCALBIN)
+	$(call download-tool,$(OPM),$(OPM_VERSION),\
+		https://github.com/operator-framework/operator-registry/releases/download/$(OPM_VERSION)/$(OS)-$(ARCH)-opm)
+
+.PHONY: kind
+kind: $(KIND) ## Download kind locally if necessary.
+$(KIND): $(LOCALBIN)
+	$(call download-tool,$(KIND),$(KIND_VERSION),\
+		https://github.com/kubernetes-sigs/kind/releases/download/$(KIND_VERSION)/kind-$(OS)-$(ARCH))
+
+# download-tool downloads a pre-built binary if it doesn't exist
+# $1 - target path with name of binary
+# $2 - version tag
+# $3 - download URL
+define download-tool
+@[ -f "$(1)-$(2)" ] || { \
+set -e; \
+echo "Downloading $(1) $(2)"; \
+curl --silent --show-error --location --fail --retry 3 --output $(1)-$(2) $(3); \
+chmod +x $(1)-$(2); \
+}; \
+ln -sf $(1)-$(2) $(1)
+endef
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary

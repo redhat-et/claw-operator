@@ -373,6 +373,7 @@ type ClawResourceReconciler struct {
 	ImagePullPolicy string
 }
 
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws,verbs=get;list;watch
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws/finalizers,verbs=update
@@ -385,7 +386,6 @@ type ClawResourceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes/custom-host,verbs=create;update
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch
 
 // Reconcile manages the complete lifecycle of resources for Claw instances

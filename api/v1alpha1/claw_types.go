@@ -45,6 +45,15 @@ const (
 	ConfigModeOverwrite ConfigMode = "overwrite"
 )
 
+// McpTransport selects the HTTP transport type for remote MCP servers.
+// +kubebuilder:validation:Enum=streamable-http;sse
+type McpTransport string
+
+const (
+	McpTransportStreamableHTTP McpTransport = "streamable-http"
+	McpTransportSSE            McpTransport = "sse"
+)
+
 // Condition types for Claw status.
 const (
 	ConditionTypeReady                   = "Ready"
@@ -222,6 +231,7 @@ type CredentialSpec struct {
 // +kubebuilder:validation:XValidation:rule="has(self.command) || has(self.url)",message="either command (stdio) or url (HTTP) must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.command) || !has(self.url)",message="command and url are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.url) || !has(self.envFrom) || size(self.envFrom) == 0",message="envFrom is only allowed for stdio MCP servers (command), not HTTP (url)"
+// +kubebuilder:validation:XValidation:rule="!has(self.transport) || has(self.url)",message="transport is only allowed for HTTP MCP servers (url)"
 type McpServerSpec struct {
 	// Command is the executable for a stdio MCP server.
 	// +optional
@@ -238,7 +248,7 @@ type McpServerSpec struct {
 	// Transport selects the HTTP transport type ("streamable-http" or "sse").
 	// Only valid when url is set.
 	// +optional
-	Transport string `json:"transport,omitempty"`
+	Transport McpTransport `json:"transport,omitempty"`
 
 	// Env are plain environment variables passed to the stdio server process
 	// and written into the MCP server config in operator.json.
