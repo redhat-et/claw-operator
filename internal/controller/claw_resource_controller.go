@@ -88,7 +88,6 @@ const (
 	NetworkPolicyKind         = "NetworkPolicy"
 	ServiceKind               = "Service"
 	PersistentVolumeClaimKind = "PersistentVolumeClaim"
-	ClusterRoleKind           = "ClusterRole"
 )
 
 // sanitizeLabelValue ensures a value conforms to Kubernetes label constraints (max 63 chars,
@@ -408,7 +407,8 @@ type ClawResourceReconciler struct {
 	ImagePullPolicy    string
 }
 
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws,verbs=get;list;watch
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws/finalizers,verbs=update
@@ -423,7 +423,6 @@ type ClawResourceReconciler struct {
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes/custom-host,verbs=create;update
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile manages the complete lifecycle of resources for Claw instances
 func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) { //nolint:gocyclo
@@ -453,6 +452,11 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err := r.Status().Update(ctx, instance); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to persist Idle condition removal: %w", err)
 		}
+	}
+
+	// Delete legacy ClusterRole left by pre-Role versions of the operator
+	if err := r.cleanupLegacyDevicePairingClusterRole(ctx, instance.Name); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to clean up legacy device-pairing ClusterRole: %w", err)
 	}
 
 	// Clean up device-pairing resources if device pairing is now disabled
@@ -601,11 +605,8 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		remainingObjects = append(remainingObjects, obj)
 	}
 
-	// Set namespace and owner references (skip cluster-scoped resources)
+	// Set namespace and owner references
 	for _, obj := range remainingObjects {
-		if isClusterScoped(obj) {
-			continue
-		}
 		obj.SetNamespace(instance.Namespace)
 		if err := controllerutil.SetControllerReference(instance, obj, r.Scheme); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to set controller reference: %w", err)
@@ -943,7 +944,7 @@ func (r *ClawResourceReconciler) buildKustomizedObjects(instance *clawv1alpha1.C
 		devicePairingManifests := map[string][]byte{
 			"manifests/claw-device-pairing/kustomization.yaml":  readEmbeddedFile("manifests/claw-device-pairing/kustomization.yaml"),
 			"manifests/claw-device-pairing/serviceaccount.yaml": readEmbeddedFile("manifests/claw-device-pairing/serviceaccount.yaml"),
-			"manifests/claw-device-pairing/clusterrole.yaml":    readEmbeddedFile("manifests/claw-device-pairing/clusterrole.yaml"),
+			"manifests/claw-device-pairing/role.yaml":           readEmbeddedFile("manifests/claw-device-pairing/role.yaml"),
 			"manifests/claw-device-pairing/rolebinding.yaml":    readEmbeddedFile("manifests/claw-device-pairing/rolebinding.yaml"),
 			"manifests/claw-device-pairing/deployment.yaml":     readEmbeddedFile("manifests/claw-device-pairing/deployment.yaml"),
 			"manifests/claw-device-pairing/service.yaml":        readEmbeddedFile("manifests/claw-device-pairing/service.yaml"),
@@ -1062,7 +1063,7 @@ func (r *ClawResourceReconciler) cleanupDevicePairingResources(ctx context.Conte
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: getDevicePairingServiceAccountName(name), Namespace: ns}},
 		newDevicePairingRouteUnstructured(name, ns),
 		newDevicePairingRoleBindingUnstructured(name, ns),
-		newDevicePairingClusterRoleUnstructured(name),
+		newDevicePairingRoleUnstructured(name, ns),
 	}
 
 	for _, obj := range resources {
@@ -1104,19 +1105,35 @@ func newDevicePairingRoleBindingUnstructured(instanceName, ns string) *unstructu
 	return u
 }
 
-func newDevicePairingClusterRoleUnstructured(instanceName string) *unstructured.Unstructured {
+func newDevicePairingRoleUnstructured(instanceName, ns string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "rbac.authorization.k8s.io",
 		Version: "v1",
-		Kind:    ClusterRoleKind,
+		Kind:    "Role",
 	})
 	u.SetName(instanceName + "-device-pairing")
+	u.SetNamespace(ns)
 	return u
 }
 
-func isClusterScoped(obj *unstructured.Unstructured) bool {
-	return obj.GetKind() == ClusterRoleKind
+func (r *ClawResourceReconciler) cleanupLegacyDevicePairingClusterRole(ctx context.Context, instanceName string) error {
+	logger := log.FromContext(ctx)
+	legacyCR := &unstructured.Unstructured{}
+	legacyCR.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "rbac.authorization.k8s.io",
+		Version: "v1",
+		Kind:    "ClusterRole",
+	})
+	legacyCR.SetName(instanceName + "-device-pairing")
+	if err := r.Delete(ctx, legacyCR); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete legacy device-pairing ClusterRole %q: %w", legacyCR.GetName(), err)
+	}
+	logger.Info("Deleted legacy device-pairing ClusterRole", "name", legacyCR.GetName())
+	return nil
 }
 
 // injectRouteHostIntoDevicePairingRoute replaces the OPENCLAW_ROUTE_HOST placeholder
