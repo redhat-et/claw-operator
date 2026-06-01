@@ -33,26 +33,93 @@ func pluginsEnabled(instance *clawv1alpha1.Claw) bool {
 	return len(instance.Spec.Plugins) > 0
 }
 
+// effectivePlugins returns the complete list of plugins to install: explicit
+// spec.plugins plus any implicitly required by the configured credentials
+// (e.g., Vertex AI SDK providers that need an external plugin).
+// Duplicates are removed (spec declarations take precedence).
+func effectivePlugins(instance *clawv1alpha1.Claw) []string {
+	implicit := requiredProviderPlugins(instance)
+	if len(implicit) == 0 {
+		return instance.Spec.Plugins
+	}
+	seen := make(map[string]bool, len(instance.Spec.Plugins))
+	for _, p := range instance.Spec.Plugins {
+		seen[p] = true
+	}
+	merged := append([]string{}, instance.Spec.Plugins...)
+	for _, p := range implicit {
+		if !seen[p] {
+			merged = append(merged, p)
+			seen[p] = true
+		}
+	}
+	return merged
+}
+
+// requiredProviderPlugins inspects credentials and returns plugin package specs
+// that must be installed for the configured providers to work.
+func requiredProviderPlugins(instance *clawv1alpha1.Claw) []string {
+	var plugins []string
+	seen := make(map[string]bool)
+	for _, cred := range instance.Spec.Credentials {
+		if !usesVertexSDK(cred) {
+			continue
+		}
+		defaults, ok := knownProviders[cred.Provider]
+		if !ok || defaults.VertexPlugin == "" {
+			continue
+		}
+		if !seen[defaults.VertexPlugin] {
+			plugins = append(plugins, defaults.VertexPlugin)
+			seen[defaults.VertexPlugin] = true
+		}
+	}
+	return plugins
+}
+
 func generatePluginInstallScript(plugins []string) string {
 	var b strings.Builder
-	b.WriteString("set -e")
+	b.WriteString(`set -e
+EXT="/home/node/.openclaw/extensions"
+MANIFEST="$EXT/.operator-managed"
+if [ -f "$MANIFEST" ]; then
+  while IFS= read -r dir; do
+    case "$dir" in
+      ""|.|..|*/*|*..*) continue ;;
+    esac
+    target="$EXT/$dir"
+    [ -e "$target" ] || continue
+    rm -rf -- "$target"
+  done < "$MANIFEST"
+  rm -f "$MANIFEST"
+else
+  # No manifest from a previous successful install — clean all extension
+  # dirs to avoid "plugin already exists" errors from orphaned directories
+  # left by pods killed mid-install or pre-manifest operator versions.
+  find "$EXT" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+fi
+mkdir -p "$EXT"
+ls "$EXT" 2>/dev/null | sort > /tmp/before-plugins.txt
+`)
 	for _, pkg := range plugins {
 		escaped := "'" + strings.ReplaceAll(pkg, "'", "'\\''") + "'"
-		b.WriteString("; openclaw plugins install clawhub:")
-		b.WriteString(escaped)
+		fmt.Fprintf(&b, "openclaw plugins install clawhub:%s\n", escaped)
 	}
+	b.WriteString(`ls "$EXT" | sort | comm -13 /tmp/before-plugins.txt - > "$MANIFEST"
+`)
 	return b.String()
 }
 
 // configurePluginsInitContainer adds an init-plugins init container to the
-// gateway Deployment when spec.plugins is non-empty. The container runs the
+// gateway Deployment when plugins need to be installed. The container runs the
 // openclaw CLI to install each declared plugin on the shared PVC. It goes
 // through the MITM proxy (appended after wait-for-proxy).
 func configurePluginsInitContainer(
 	objects []*unstructured.Unstructured,
 	instance *clawv1alpha1.Claw,
+	plugins []string,
 ) error {
-	if !pluginsEnabled(instance) {
+	if len(plugins) == 0 {
 		return nil
 	}
 
@@ -88,7 +155,7 @@ func configurePluginsInitContainer(
 		initContainers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "initContainers")
 
 		proxyHost := fmt.Sprintf("http://%s-proxy:8080", instance.Name)
-		script := generatePluginInstallScript(instance.Spec.Plugins)
+		script := generatePluginInstallScript(plugins)
 
 		initContainers = append(initContainers, map[string]any{
 			"name":            PluginsInitContainerName,

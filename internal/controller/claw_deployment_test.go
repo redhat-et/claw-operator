@@ -1122,3 +1122,286 @@ func TestMcpAnnotationKey(t *testing.T) {
 		assert.Regexp(t, `^[0-9a-f]{12}$`, key, "should only contain valid hex chars regardless of input")
 	})
 }
+
+// --- CreateOrUpdate deployment apply tests ---
+
+func TestApplyDeployment(t *testing.T) {
+	ctx := context.Background()
+
+	makeUnstructuredDeployment := func(name, ns, image string) *unstructured.Unstructured {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind(DeploymentKind))
+		obj.SetName(name)
+		obj.SetNamespace(ns)
+		obj.Object["spec"] = map[string]any{
+			"replicas": int64(1),
+			"selector": map[string]any{
+				"matchLabels": map[string]any{"app": "claw"},
+			},
+			"strategy": map[string]any{"type": "Recreate"},
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{"app": "claw"},
+					"annotations": map[string]any{
+						clawv1alpha1.AnnotationKeyGatewayConfigHash: "somehash",
+					},
+				},
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{
+							"name":  "gateway",
+							"image": image,
+						},
+					},
+				},
+			},
+		}
+		return obj
+	}
+
+	t.Run("should create deployment on first apply", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		reconciler := createClawReconciler()
+		desired := makeUnstructuredDeployment("cou-create", namespace, "ghcr.io/openclaw/openclaw:slim")
+
+		changed, err := reconciler.applyDeployment(ctx, desired)
+		require.NoError(t, err)
+		assert.True(t, changed, "first apply should report changed")
+
+		deployment := &appsv1.Deployment{}
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "cou-create", Namespace: namespace}, deployment))
+		assert.Equal(t, "ghcr.io/openclaw/openclaw:slim", deployment.Spec.Template.Spec.Containers[0].Image)
+	})
+
+	t.Run("should not update on identical second apply", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		reconciler := createClawReconciler()
+		desired1 := makeUnstructuredDeployment("cou-idempotent", namespace, "ghcr.io/openclaw/openclaw:slim")
+
+		changed, err := reconciler.applyDeployment(ctx, desired1)
+		require.NoError(t, err)
+		assert.True(t, changed)
+
+		deployment := &appsv1.Deployment{}
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "cou-idempotent", Namespace: namespace}, deployment))
+		gen1 := deployment.Generation
+
+		desired2 := makeUnstructuredDeployment("cou-idempotent", namespace, "ghcr.io/openclaw/openclaw:slim")
+		changed, err = reconciler.applyDeployment(ctx, desired2)
+		require.NoError(t, err)
+		assert.False(t, changed, "identical second apply should report unchanged")
+
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "cou-idempotent", Namespace: namespace}, deployment))
+		assert.Equal(t, gen1, deployment.Generation, "generation should not increment on idempotent apply")
+	})
+
+	t.Run("should update when image changes", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		reconciler := createClawReconciler()
+		desired1 := makeUnstructuredDeployment("cou-image-change", namespace, "ghcr.io/openclaw/openclaw:v1")
+
+		_, err := reconciler.applyDeployment(ctx, desired1)
+		require.NoError(t, err)
+
+		desired2 := makeUnstructuredDeployment("cou-image-change", namespace, "ghcr.io/openclaw/openclaw:v2")
+		changed, err := reconciler.applyDeployment(ctx, desired2)
+		require.NoError(t, err)
+		assert.True(t, changed, "image change should be detected")
+
+		deployment := &appsv1.Deployment{}
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "cou-image-change", Namespace: namespace}, deployment))
+		assert.Equal(t, "ghcr.io/openclaw/openclaw:v2", deployment.Spec.Template.Spec.Containers[0].Image)
+	})
+
+	t.Run("should update when replicas change", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		reconciler := createClawReconciler()
+		desired1 := makeUnstructuredDeployment("cou-replicas", namespace, "ghcr.io/openclaw/openclaw:slim")
+
+		_, err := reconciler.applyDeployment(ctx, desired1)
+		require.NoError(t, err)
+
+		desired2 := makeUnstructuredDeployment("cou-replicas", namespace, "ghcr.io/openclaw/openclaw:slim")
+		require.NoError(t, unstructured.SetNestedField(desired2.Object, int64(0), "spec", "replicas"))
+
+		changed, err := reconciler.applyDeployment(ctx, desired2)
+		require.NoError(t, err)
+		assert.True(t, changed, "replicas change should be detected")
+	})
+
+	t.Run("should preserve annotations from other controllers", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		reconciler := createClawReconciler()
+		desired1 := makeUnstructuredDeployment("cou-annot", namespace, "ghcr.io/openclaw/openclaw:slim")
+
+		_, err := reconciler.applyDeployment(ctx, desired1)
+		require.NoError(t, err)
+
+		deployment := &appsv1.Deployment{}
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "cou-annot", Namespace: namespace}, deployment))
+		if deployment.Annotations == nil {
+			deployment.Annotations = make(map[string]string)
+		}
+		deployment.Annotations["kubectl.kubernetes.io/last-applied-configuration"] = "{}"
+		require.NoError(t, k8sClient.Update(ctx, deployment))
+
+		desired2 := makeUnstructuredDeployment("cou-annot", namespace, "ghcr.io/openclaw/openclaw:slim")
+		_, err = reconciler.applyDeployment(ctx, desired2)
+		require.NoError(t, err)
+
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "cou-annot", Namespace: namespace}, deployment))
+		assert.Equal(t, "{}",
+			deployment.Annotations["kubectl.kubernetes.io/last-applied-configuration"],
+			"annotations from other controllers should be preserved")
+	})
+
+	t.Run("should preserve labels from other controllers", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		reconciler := createClawReconciler()
+		desired1 := makeUnstructuredDeployment("cou-labels", namespace, "ghcr.io/openclaw/openclaw:slim")
+
+		_, err := reconciler.applyDeployment(ctx, desired1)
+		require.NoError(t, err)
+
+		// Simulate another controller adding a label
+		deployment := &appsv1.Deployment{}
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "cou-labels", Namespace: namespace}, deployment))
+		if deployment.Labels == nil {
+			deployment.Labels = make(map[string]string)
+		}
+		deployment.Labels["other-controller"] = "managed"
+		require.NoError(t, k8sClient.Update(ctx, deployment))
+
+		// Re-apply — operator's labels should merge, not clobber
+		desired2 := makeUnstructuredDeployment("cou-labels", namespace, "ghcr.io/openclaw/openclaw:slim")
+		desired2.SetLabels(map[string]string{"app": "claw"})
+		_, err = reconciler.applyDeployment(ctx, desired2)
+		require.NoError(t, err)
+
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "cou-labels", Namespace: namespace}, deployment))
+		assert.Equal(t, "managed", deployment.Labels["other-controller"],
+			"labels from other controllers should be preserved")
+		assert.Equal(t, "claw", deployment.Labels["app"])
+	})
+}
+
+// --- CreateOrUpdate integration test (full reconcile loop) ---
+
+func TestDeploymentCreateOrUpdateIntegration(t *testing.T) {
+	const resourceName = testInstanceName
+	ctx := context.Background()
+
+	t.Run("should not increment gateway generation on idempotent reconcile", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		createClawInstance(t, ctx, resourceName, namespace)
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, resourceName, namespace)
+
+		deployment := &appsv1.Deployment{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getClawDeploymentName(testInstanceName),
+				Namespace: namespace,
+			}, deployment) == nil
+		}, "gateway Deployment should be created")
+
+		gen1 := deployment.Generation
+
+		reconcileClaw(t, ctx, reconciler, resourceName, namespace)
+
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{
+			Name:      getClawDeploymentName(testInstanceName),
+			Namespace: namespace,
+		}, deployment))
+
+		assert.Equal(t, gen1, deployment.Generation,
+			"generation should not increment on idempotent reconcile")
+	})
+
+	t.Run("should not increment proxy generation on idempotent reconcile", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		createClawInstance(t, ctx, resourceName, namespace)
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, resourceName, namespace)
+
+		proxyDeploy := &appsv1.Deployment{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getProxyDeploymentName(testInstanceName),
+				Namespace: namespace,
+			}, proxyDeploy) == nil
+		}, "proxy Deployment should be created")
+
+		proxyGen := proxyDeploy.Generation
+
+		reconcileClaw(t, ctx, reconciler, resourceName, namespace)
+
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{
+			Name:      getProxyDeploymentName(testInstanceName),
+			Namespace: namespace,
+		}, proxyDeploy))
+
+		assert.Equal(t, proxyGen, proxyDeploy.Generation,
+			"proxy generation should not increment on idempotent reconcile")
+	})
+
+	t.Run("should not increment device-pairing generation on idempotent reconcile", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		createClawInstance(t, ctx, resourceName, namespace)
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, resourceName, namespace)
+
+		dpDeploy := &appsv1.Deployment{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getDevicePairingDeploymentName(testInstanceName),
+				Namespace: namespace,
+			}, dpDeploy) == nil
+		}, "device-pairing Deployment should be created")
+
+		dpGen := dpDeploy.Generation
+
+		reconcileClaw(t, ctx, reconciler, resourceName, namespace)
+
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{
+			Name:      getDevicePairingDeploymentName(testInstanceName),
+			Namespace: namespace,
+		}, dpDeploy))
+
+		assert.Equal(t, dpGen, dpDeploy.Generation,
+			"device-pairing generation should not increment on idempotent reconcile")
+	})
+
+	t.Run("should set owner references on deployments", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		createClawInstance(t, ctx, resourceName, namespace)
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, resourceName, namespace)
+
+		for _, name := range []string{
+			getClawDeploymentName(testInstanceName),
+			getProxyDeploymentName(testInstanceName),
+			getDevicePairingDeploymentName(testInstanceName),
+		} {
+			deployment := &appsv1.Deployment{}
+			waitFor(t, timeout, interval, func() bool {
+				return k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, deployment) == nil
+			}, name+" should be created")
+
+			require.NotEmpty(t, deployment.OwnerReferences,
+				"%s should have owner references", name)
+			assert.Equal(t, ClawResourceKind, deployment.OwnerReferences[0].Kind,
+				"%s owner should be a Claw", name)
+		}
+	})
+}

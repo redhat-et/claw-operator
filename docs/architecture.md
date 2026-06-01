@@ -46,13 +46,15 @@ The proxy sits between the gateway and external APIs, injecting credentials into
 
 **Why two CONNECT modes?** Most domains need MITM for credential injection, path filtering, or header injection. But some protocols (WhatsApp Noise handshake, certain WebSocket tunnels) break under TLS interception. Domains with `type: none` and no path/header restrictions use a direct CONNECT tunnel instead.
 
-**Provider defaults**: known providers (google, anthropic, openai, openrouter, xai) have pre-configured domain and apiKey header defaults. Users only need to specify `provider` and `secretRef` — the operator infers the rest. Explicit values always take precedence as an escape hatch.
+**Provider defaults**: The `knownProviders` registry in `claw_providers.go` centralizes all per-provider knowledge: credential defaults (domain, header), wire format API identifier, Vertex AI SDK config, companion relationships, and model catalog. For `google` and `anthropic`, users only need `provider` and `secretRef` — the operator infers domain and apiKey header. For `openai` and `xai`, domain must be explicit (they use `type: bearer`). Providers not in the registry (e.g., `openrouter`, custom providers) still work but require fully explicit configuration. Explicit values always take precedence as an escape hatch.
+
+**Wire format API**: Each provider in `knownProviders` declares the OpenClaw wire format API it requires (e.g., `google-generative-ai` for Google, `anthropic-messages` for Anthropic, `openai-codex-responses` for the internal openai-codex companion). `buildProviderEntry()` bakes the correct `api` field into every `models.providers` entry at generation time. Providers using the OpenClaw default (`openai-completions`) — like `openai`, `xai`, and unknown providers — omit the field entirely.
 
 **Channel defaults**: known channels (telegram, discord, slack, whatsapp) have pre-configured domain, credential type, companion routes, and placeholder tokens. Users only need to specify `channel` and `secretRef` — the operator infers proxy config and injects channel enablement into `operator.json`. This mirrors the `provider` pattern for LLM credentials. Explicit values always take precedence as an escape hatch.
 
-**Vertex AI path**: credentials with `type: gcp` and a non-google `provider` (e.g., anthropic) use the native Vertex AI SDK rather than gateway routing. The operator creates a stub ADC (Application Default Credentials) ConfigMap so google-auth-library can bootstrap, and the proxy intercepts token refresh requests to vend real tokens.
+**Vertex AI path**: credentials with `type: gcp` and a non-google `provider` (e.g., anthropic) use the native Vertex AI SDK rather than gateway routing. The operator creates a stub ADC (Application Default Credentials) ConfigMap so google-auth-library can bootstrap, and the proxy intercepts token refresh requests to vend real tokens. Providers that require an external OpenClaw plugin for the Vertex SDK path (declared via `VertexPlugin` in `knownProviders`) are auto-installed — `effectivePlugins()` merges these implicit plugins with explicit `spec.plugins` entries, deduplicating where both are declared.
 
-**Companion providers**: OpenClaw sometimes routes models through internal provider names that differ from the user-facing provider. For example, GPT-5.x models (gpt-5.5, gpt-5.4, gpt-5.4-mini) are routed through an internal `openai-codex` provider rather than `openai`. The `companionProviders` map in `claw_providers.go` handles this: when `injectProviders` creates a provider entry, it also creates entries for any companions with the same `baseUrl` and placeholder API key. This ensures the proxy handles credential injection for all models without requiring users to configure additional providers. Companion keys are checked for collisions with the same error path as primary providers.
+**Companion providers**: OpenClaw sometimes routes models through internal provider names that differ from the user-facing provider. For example, GPT-5.x models (gpt-5.5, gpt-5.4, gpt-5.4-mini) are routed through an internal `openai-codex` provider rather than `openai`. The `knownProviders` registry in `claw_providers.go` declares these relationships via the `Companions` field: when `injectProviders` creates a provider entry, it also creates entries for any companions with the same `baseUrl` and placeholder API key (using `buildProviderEntry` to ensure the correct wire format API is set). This ensures the proxy handles credential injection for all models without requiring users to configure additional providers. Companion keys are checked for collisions with the same error path as primary providers.
 
 ## NetworkPolicy and Egress Rules
 
@@ -78,4 +80,16 @@ Two Kustomize components under `internal/assets/manifests/`:
 The proxy ConfigMap is intentionally excluded from Kustomize (file prefixed with `_`). It's applied directly by the controller because its content is generated dynamically from resolved credentials, not from a static template.
 
 Both components share the `app.kubernetes.io/name: claw` label applied via their respective `kustomization.yaml` files.
+
+## Deployment Apply Strategy (CreateOrUpdate)
+
+Deployments are applied via `controllerutil.CreateOrUpdate` rather than server-side apply (SSA). SSA with `Force: true` causes `generation` to increment on every patch — even when the desired state is identical — due to field-ownership transfers between `claw-operator` (Apply) and `kube-controller-manager` (Update). For the gateway Deployment (strategy: Recreate), this triggered unnecessary pod-killing rollouts; for RollingUpdate Deployments, it caused continuous reconciliation loops.
+
+`CreateOrUpdate` avoids this by comparing before/after state with `DeepEqual` and skipping the Update when nothing changed. All other resources (ConfigMaps, Services, NetworkPolicies, Routes) continue to use SSA, which works correctly for resources without field-ownership conflicts.
+
+A `NormalizeDeployment()` function pre-applies Kubernetes admission defaults (strategy fields, `terminationGracePeriodSeconds`, container `imagePullPolicy`, probe thresholds, etc.) onto the desired spec before comparison. Without this, the operator's desired spec (missing defaulted fields) would always differ from the API server's stored spec (with defaults populated), causing an Update on every reconcile.
+
+The Kustomize-rendered unstructured Deployment is converted to a typed `*appsv1.Deployment` via `runtime.DefaultUnstructuredConverter.FromUnstructured()` at the apply boundary.
+
+See [ADR-0018](adr/0018-centralized-provider-registry.md) for the full decision record.
 

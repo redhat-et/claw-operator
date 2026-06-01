@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,25 +94,86 @@ func TestPluginsEnabled(t *testing.T) {
 // --- generatePluginInstallScript tests ---
 
 func TestGeneratePluginInstallScript(t *testing.T) {
-	t.Run("should generate script for single plugin", func(t *testing.T) {
+	t.Run("should contain manifest cleanup phase", func(t *testing.T) {
 		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
-		assert.Equal(t, "set -e; openclaw plugins install clawhub:'@openclaw/matrix'", script)
+		assert.Contains(t, script, `MANIFEST="$EXT/.operator-managed"`)
+		assert.Contains(t, script, `if [ -f "$MANIFEST" ]; then`)
+		assert.Contains(t, script, `rm -rf -- "$target"`)
+		assert.Contains(t, script, `rm -f "$MANIFEST"`)
 	})
 
-	t.Run("should generate script for multiple plugins", func(t *testing.T) {
+	t.Run("should contain pre-install snapshot phase", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.Contains(t, script, `mkdir -p "$EXT"`)
+		assert.Contains(t, script, `ls "$EXT" 2>/dev/null | sort > /tmp/before-plugins.txt`)
+	})
+
+	t.Run("should contain diff-record phase", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.Contains(t, script, `ls "$EXT" | sort | comm -13 /tmp/before-plugins.txt - > "$MANIFEST"`)
+	})
+
+	t.Run("should generate install command for single plugin", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.Contains(t, script, "openclaw plugins install clawhub:'@openclaw/matrix'")
+	})
+
+	t.Run("should generate install commands for multiple plugins", func(t *testing.T) {
 		script := generatePluginInstallScript([]string{"@openclaw/matrix", "@openclaw/diagnostics-otel"})
-		expected := "set -e; openclaw plugins install clawhub:'@openclaw/matrix'; openclaw plugins install clawhub:'@openclaw/diagnostics-otel'"
-		assert.Equal(t, expected, script)
+		assert.Contains(t, script, "openclaw plugins install clawhub:'@openclaw/matrix'")
+		assert.Contains(t, script, "openclaw plugins install clawhub:'@openclaw/diagnostics-otel'")
 	})
 
 	t.Run("should escape single quotes in plugin names", func(t *testing.T) {
 		script := generatePluginInstallScript([]string{"foo'bar"})
-		assert.Equal(t, "set -e; openclaw plugins install clawhub:'foo'\\''bar'", script)
+		assert.Contains(t, script, "openclaw plugins install clawhub:'foo'\\''bar'")
 	})
 
 	t.Run("should escape shell metacharacters", func(t *testing.T) {
 		script := generatePluginInstallScript([]string{"foo; rm -rf /"})
 		assert.Contains(t, script, "'foo; rm -rf /'")
+	})
+
+	t.Run("should not contain blanket rm -rf extensions", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.NotContains(t, script, "rm -rf /home/node/.openclaw/extensions")
+	})
+
+	t.Run("should clean all extension dirs when no manifest exists", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.Contains(t, script, "else")
+		assert.Contains(t, script, `find "$EXT" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +`)
+	})
+
+	t.Run("should guard against path traversal in manifest entries", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.Contains(t, script, `""|.|..|*/*|*..*)`)
+		assert.Contains(t, script, `[ -e "$target" ] || continue`)
+	})
+
+	t.Run("should order phases correctly: cleanup before snapshot before install before record", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		cleanupIdx := strings.Index(script, `rm -rf -- "$target"`)
+		snapshotIdx := strings.Index(script, `/tmp/before-plugins.txt`)
+		installIdx := strings.Index(script, "openclaw plugins install")
+		recordIdx := strings.Index(script, `comm -13`)
+
+		require.Greater(t, cleanupIdx, 0, "cleanup phase should be present")
+		require.Greater(t, snapshotIdx, 0, "snapshot phase should be present")
+		require.Greater(t, installIdx, 0, "install phase should be present")
+		require.Greater(t, recordIdx, 0, "record phase should be present")
+
+		assert.Less(t, cleanupIdx, snapshotIdx, "cleanup should come before snapshot")
+		assert.Less(t, snapshotIdx, installIdx, "snapshot should come before install")
+		assert.Less(t, installIdx, recordIdx, "install should come before record")
+	})
+
+	t.Run("should use consistent extensions path variable across all phases", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.Contains(t, script, `EXT="/home/node/.openclaw/extensions"`)
+		assert.Contains(t, script, `target="$EXT/$dir"`)
+		assert.Contains(t, script, `mkdir -p "$EXT"`)
+		assert.Contains(t, script, `ls "$EXT"`)
 	})
 }
 
@@ -122,7 +184,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		objects := makeTestDeploymentForPlugins()
 		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
 
-		require.NoError(t, configurePluginsInitContainer(objects, instance))
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers",
@@ -143,7 +205,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		objects := makeTestDeploymentForPlugins()
 		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
 
-		require.NoError(t, configurePluginsInitContainer(objects, instance))
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers",
@@ -170,7 +232,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		objects := makeTestDeploymentForPlugins()
 		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
 
-		require.NoError(t, configurePluginsInitContainer(objects, instance))
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers",
@@ -196,7 +258,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		objects := makeTestDeploymentForPlugins()
 		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
 
-		require.NoError(t, configurePluginsInitContainer(objects, instance))
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers",
@@ -217,7 +279,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		objects := makeTestDeploymentForPlugins()
 		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
 
-		require.NoError(t, configurePluginsInitContainer(objects, instance))
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers",
@@ -230,7 +292,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		objects := makeTestDeploymentForPlugins()
 		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
 
-		require.NoError(t, configurePluginsInitContainer(objects, instance))
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers",
@@ -246,7 +308,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		objects := makeTestDeploymentForPlugins()
 		instance := testClawWithPlugins([]string{"@openclaw/matrix", "@openclaw/diagnostics-otel"})
 
-		require.NoError(t, configurePluginsInitContainer(objects, instance))
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers",
@@ -259,11 +321,28 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		assert.Contains(t, script, "openclaw plugins install clawhub:'@openclaw/diagnostics-otel'")
 	})
 
+	t.Run("should include manifest-tracked cleanup in init container script", func(t *testing.T) {
+		objects := makeTestDeploymentForPlugins()
+		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
+
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
+
+		initContainers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "initContainers",
+		)
+		pluginInit := initContainers[3].(map[string]any)
+		command := pluginInit["command"].([]any)
+		script := command[2].(string)
+		assert.Contains(t, script, `.operator-managed`)
+		assert.Contains(t, script, `comm -13 /tmp/before-plugins.txt`)
+		assert.NotContains(t, script, "rm -rf /home/node/.openclaw/extensions")
+	})
+
 	t.Run("should no-op when plugins are empty", func(t *testing.T) {
 		objects := makeTestDeploymentForPlugins()
 		instance := testClawWithPlugins(nil)
 
-		require.NoError(t, configurePluginsInitContainer(objects, instance))
+		require.NoError(t, configurePluginsInitContainer(objects, instance, instance.Spec.Plugins))
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers",
@@ -275,7 +354,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		objects := []*unstructured.Unstructured{}
 		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
 
-		err := configurePluginsInitContainer(objects, instance)
+		err := configurePluginsInitContainer(objects, instance, instance.Spec.Plugins)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found in manifests")
 	})
@@ -297,9 +376,136 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		}
 		instance := testClawWithPlugins([]string{"@openclaw/matrix"})
 
-		err := configurePluginsInitContainer([]*unstructured.Unstructured{dep}, instance)
+		err := configurePluginsInitContainer([]*unstructured.Unstructured{dep}, instance, instance.Spec.Plugins)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "gateway container image not found")
+	})
+}
+
+// --- effectivePlugins and requiredProviderPlugins tests ---
+
+func TestRequiredProviderPlugins(t *testing.T) {
+	t.Run("returns vertex plugin for anthropic GCP credential", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{
+						Name:     "anthropic-vertex",
+						Type:     clawv1alpha1.CredentialTypeGCP,
+						Provider: "anthropic",
+						GCP:      &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"},
+					},
+				},
+			},
+		}
+		plugins := requiredProviderPlugins(instance)
+		require.Len(t, plugins, 1)
+		assert.Equal(t, "@openclaw/anthropic-vertex-provider", plugins[0])
+	})
+
+	t.Run("returns empty for google GCP credential", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{
+						Name:     "vertex",
+						Type:     clawv1alpha1.CredentialTypeGCP,
+						Provider: "google",
+						GCP:      &clawv1alpha1.GCPConfig{Project: "p", Location: "us-central1"},
+					},
+				},
+			},
+		}
+		assert.Empty(t, requiredProviderPlugins(instance))
+	})
+
+	t.Run("returns empty for anthropic apiKey credential", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{
+						Name:     "claude",
+						Type:     clawv1alpha1.CredentialTypeAPIKey,
+						Provider: "anthropic",
+						Domain:   "api.anthropic.com",
+					},
+				},
+			},
+		}
+		assert.Empty(t, requiredProviderPlugins(instance))
+	})
+
+	t.Run("deduplicates when multiple anthropic vertex credentials exist", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{Name: "a1", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+						GCP: &clawv1alpha1.GCPConfig{Project: "p1", Location: "us-east5"}},
+					{Name: "a2", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+						GCP: &clawv1alpha1.GCPConfig{Project: "p2", Location: "europe-west1"}},
+				},
+			},
+		}
+		plugins := requiredProviderPlugins(instance)
+		assert.Len(t, plugins, 1)
+	})
+}
+
+func TestEffectivePlugins(t *testing.T) {
+	t.Run("returns only spec plugins when no implicit plugins needed", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Plugins: []string{"@openclaw/matrix"},
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{Name: "g", Type: clawv1alpha1.CredentialTypeAPIKey, Provider: "google"},
+				},
+			},
+		}
+		assert.Equal(t, []string{"@openclaw/matrix"}, effectivePlugins(instance))
+	})
+
+	t.Run("merges implicit vertex plugin with spec plugins", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Plugins: []string{"@openclaw/matrix"},
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
+				},
+			},
+		}
+		plugins := effectivePlugins(instance)
+		assert.Contains(t, plugins, "@openclaw/matrix")
+		assert.Contains(t, plugins, "@openclaw/anthropic-vertex-provider")
+		assert.Len(t, plugins, 2)
+	})
+
+	t.Run("does not duplicate if spec already declares the plugin", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Plugins: []string{"@openclaw/anthropic-vertex-provider"},
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
+				},
+			},
+		}
+		plugins := effectivePlugins(instance)
+		assert.Equal(t, []string{"@openclaw/anthropic-vertex-provider"}, plugins)
+	})
+
+	t.Run("returns implicit plugins when spec.plugins is empty", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
+				},
+			},
+		}
+		plugins := effectivePlugins(instance)
+		require.Len(t, plugins, 1)
+		assert.Equal(t, "@openclaw/anthropic-vertex-provider", plugins[0])
 	})
 }
 

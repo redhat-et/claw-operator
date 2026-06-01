@@ -781,7 +781,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	if err := injectAllowedEgress(objects, instance); err != nil {
 		return fmt.Errorf("failed to inject allowed egress rules: %w", err)
 	}
-	if err := stampGatewayConfigHash(objects, instance.Name, instance.Spec.Plugins); err != nil {
+	if err := stampGatewayConfigHash(objects, instance.Name, effectivePlugins(instance)); err != nil {
 		return fmt.Errorf("failed to stamp gateway config hash: %w", err)
 	}
 	return nil
@@ -836,8 +836,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 			return fmt.Errorf("failed to configure metrics sidecar: %w", err)
 		}
 	}
-	if pluginsEnabled(instance) {
-		if err := configurePluginsInitContainer(objects, instance); err != nil {
+	plugins := effectivePlugins(instance)
+	if len(plugins) > 0 {
+		if err := configurePluginsInitContainer(objects, instance, plugins); err != nil {
 			return fmt.Errorf("failed to configure plugins init container: %w", err)
 		}
 	}
@@ -992,13 +993,26 @@ func (r *ClawResourceReconciler) buildKustomizedObjects(instance *clawv1alpha1.C
 	return allObjects, nil
 }
 
-// applyResources applies a list of unstructured objects using server-side apply
-// Returns the number of resources successfully applied (excluding skipped resources)
+// applyResources applies a list of unstructured objects. Deployments are applied
+// via controllerutil.CreateOrUpdate (to avoid SSA field-ownership generation bumps);
+// all other resource types use server-side apply.
+// Returns the number of resources actually applied or updated.
 func (r *ClawResourceReconciler) applyResources(ctx context.Context, objects []*unstructured.Unstructured) (int, error) {
 	logger := log.FromContext(ctx)
 	appliedCount := 0
 
 	for _, obj := range objects {
+		if obj.GetKind() == DeploymentKind {
+			changed, err := r.applyDeployment(ctx, obj)
+			if err != nil {
+				return 0, fmt.Errorf("failed to apply deployment %s: %w", obj.GetName(), err)
+			}
+			if changed {
+				appliedCount++
+			}
+			continue
+		}
+
 		if err := r.Patch(ctx, obj, client.Apply, &client.PatchOptions{
 			FieldManager: "claw-operator",
 			Force:        ptr.To(true),
@@ -1014,6 +1028,56 @@ func (r *ClawResourceReconciler) applyResources(ctx context.Context, objects []*
 	}
 	logger.Info("Successfully applied resources", "count", appliedCount)
 	return appliedCount, nil
+}
+
+// applyDeployment converts an unstructured Deployment to a typed *appsv1.Deployment,
+// normalizes admission defaults, and applies it via controllerutil.CreateOrUpdate.
+// This avoids the SSA field-ownership fight that causes generation increments on
+// every reconcile even when the spec is identical.
+// Returns true if the Deployment was created or updated, false if unchanged.
+func (r *ClawResourceReconciler) applyDeployment(ctx context.Context, obj *unstructured.Unstructured) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	desired := &appsv1.Deployment{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, desired); err != nil {
+		return false, fmt.Errorf("failed to convert unstructured to Deployment: %w", err)
+	}
+	NormalizeDeployment(desired)
+
+	existing := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      desired.Name,
+			Namespace: desired.Namespace,
+		},
+	}
+
+	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
+		if len(desired.Labels) > 0 {
+			if existing.Labels == nil {
+				existing.Labels = make(map[string]string, len(desired.Labels))
+			}
+			maps.Copy(existing.Labels, desired.Labels)
+		}
+
+		if len(desired.Annotations) > 0 {
+			if existing.Annotations == nil {
+				existing.Annotations = make(map[string]string, len(desired.Annotations))
+			}
+			maps.Copy(existing.Annotations, desired.Annotations)
+		}
+
+		existing.Spec = desired.Spec
+		existing.OwnerReferences = desired.OwnerReferences
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if result != controllerutil.OperationResultNone {
+		logger.Info("Applied deployment via CreateOrUpdate", "name", desired.Name, "result", result)
+	}
+	return result != controllerutil.OperationResultNone, nil
 }
 
 // applyRouteByName applies only the Route with the given name from provided objects.
@@ -1182,14 +1246,13 @@ func injectProviders(config map[string]any, instance *clawv1alpha1.Claw) error {
 			if _, exists := providers[providerKey]; exists {
 				return fmt.Errorf("duplicate provider %q in credentials", providerKey)
 			}
-			baseURL := vertexAIBaseURL(cred.GCP.Location)
 			entry := map[string]any{
-				"baseUrl":   baseURL,
+				"baseUrl":   vertexAIBaseURL(cred.GCP.Location),
 				"apiKey":    "gcp-vertex-credentials",
 				"maxTokens": 128000,
 				"models":    []any{},
 			}
-			if api, ok := vertexProviderAPIMapping[cred.Provider]; ok {
+			if api := knownProviders[cred.Provider].VertexAPI; api != "" {
 				entry["api"] = api
 			}
 			providers[providerKey] = entry
@@ -1198,21 +1261,13 @@ func injectProviders(config map[string]any, instance *clawv1alpha1.Claw) error {
 				return fmt.Errorf("duplicate provider %q in credentials", cred.Provider)
 			}
 			info := resolveProviderInfo(cred)
-			entry := map[string]any{
-				"baseUrl": info.Upstream + info.BasePath,
-				"apiKey":  "ah-ah-ah-you-didnt-say-the-magic-word",
-				"models":  []any{},
-			}
-			providers[cred.Provider] = entry
-			for _, companion := range companionProviders[cred.Provider] {
+			baseURL := info.Upstream + info.BasePath
+			providers[cred.Provider] = buildProviderEntry(cred.Provider, baseURL, "ah-ah-ah-you-didnt-say-the-magic-word")
+			for _, companion := range knownProviders[cred.Provider].Companions {
 				if _, exists := providers[companion]; exists {
 					return fmt.Errorf("duplicate provider %q (companion of %q) in credentials", companion, cred.Provider)
 				}
-				providers[companion] = map[string]any{
-					"baseUrl": info.Upstream + info.BasePath,
-					"apiKey":  "ah-ah-ah-you-didnt-say-the-magic-word",
-					"models":  []any{},
-				}
+				providers[companion] = buildProviderEntry(companion, baseURL, "ah-ah-ah-you-didnt-say-the-magic-word")
 			}
 		}
 	}
@@ -1264,8 +1319,8 @@ func injectModelCatalog(config map[string]any, instance *clawv1alpha1.Claw) {
 		}
 
 		logicalProvider := strings.TrimSuffix(providerKey, "-vertex")
-		catalog, ok := modelCatalog[logicalProvider]
-		if !ok || len(catalog) == 0 {
+		catalog := providerModelCatalog(logicalProvider)
+		if len(catalog) == 0 {
 			continue
 		}
 
