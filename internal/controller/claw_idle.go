@@ -69,6 +69,8 @@ func (r *ClawResourceReconciler) handleIdle(ctx context.Context, instance *clawv
 	instance.Status.URL = "" //nolint:staticcheck // deprecated but still populated
 	instance.Status.GatewayURL = ""
 
+	recordClawMetrics(instance)
+
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status after idling: %w", err)
 	}
