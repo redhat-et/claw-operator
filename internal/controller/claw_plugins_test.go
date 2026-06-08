@@ -49,8 +49,8 @@ func makeTestDeploymentForPlugins() []*unstructured.Unstructured {
 					},
 				},
 				"initContainers": []any{
-					map[string]any{"name": "init-volume"},
-					map[string]any{"name": "init-config"},
+					map[string]any{"name": ClawInitVolumeContainerName},
+					map[string]any{"name": ClawInitConfigContainerName},
 					map[string]any{"name": "wait-for-proxy"},
 				},
 				"volumes": []any{

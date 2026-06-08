@@ -128,6 +128,8 @@ func TestConfigureImagePullPolicy(t *testing.T) {
 
 // --- OpenClaw image override tests ---
 
+const testClawVersion = "2026.6.1"
+
 func TestConfigureClawImage(t *testing.T) {
 	makeDeployment := func() []*unstructured.Unstructured {
 		dep := &unstructured.Unstructured{}
@@ -166,11 +168,11 @@ func TestConfigureClawImage(t *testing.T) {
 		objects := makeDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
-		instance.Spec.Version = "2026.6.1"
+		instance.Spec.Version = testClawVersion
 
 		require.NoError(t, configureClawImage(objects, instance))
 
-		expected := OpenClawImageBase + ":2026.6.1"
+		expected := OpenClawImageBase + ":" + testClawVersion
 
 		initContainers, _, _ := unstructured.NestedSlice(
 			objects[0].Object, "spec", "template", "spec", "initContainers")
@@ -211,11 +213,82 @@ func TestConfigureClawImage(t *testing.T) {
 		objects := []*unstructured.Unstructured{}
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
-		instance.Spec.Version = "2026.6.1"
+		instance.Spec.Version = testClawVersion
 
 		err := configureClawImage(objects, instance)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "claw deployment not found")
+	})
+}
+
+// --- OpenClaw image override integration test ---
+
+func TestClawImageOverrideIntegration(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("should override all OpenClaw container images when spec.version is set", func(t *testing.T) {
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Namespace = namespace
+		instance.Spec.Credentials = testCredentials()
+		instance.Spec.Version = testClawVersion
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		deployment := &appsv1.Deployment{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getClawDeploymentName(testInstanceName),
+				Namespace: namespace,
+			}, deployment) == nil
+		}, "Deployment should be created")
+
+		expected := OpenClawImageBase + ":" + testClawVersion
+
+		for _, ic := range deployment.Spec.Template.Spec.InitContainers {
+			switch ic.Name {
+			case ClawInitVolumeContainerName, ClawInitConfigContainerName:
+				assert.Equal(t, expected, ic.Image,
+					"init container %s should use overridden image", ic.Name)
+			}
+		}
+
+		gateway := findContainer(deployment, ClawGatewayContainerName)
+		require.NotNil(t, gateway, "gateway container should exist")
+		assert.Equal(t, expected, gateway.Image,
+			"gateway container should use overridden image")
+	})
+
+	t.Run("should use default image when spec.version is empty", func(t *testing.T) {
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		createClawInstance(t, ctx, testInstanceName, namespace)
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		deployment := &appsv1.Deployment{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getClawDeploymentName(testInstanceName),
+				Namespace: namespace,
+			}, deployment) == nil
+		}, "Deployment should be created")
+
+		gateway := findContainer(deployment, ClawGatewayContainerName)
+		require.NotNil(t, gateway, "gateway container should exist")
+		assert.Equal(t, OpenClawImageBase+":2026.6.1", gateway.Image,
+			"should use Kustomize default when spec.version is empty")
 	})
 }
 
@@ -1259,7 +1332,7 @@ func TestClawHomePVCMountsUseSubPath(t *testing.T) {
 		for _, c := range containers {
 			container := c.(map[string]any)
 			name, _, _ := unstructured.NestedString(container, "name")
-			if name == "init-volume" {
+			if name == ClawInitVolumeContainerName {
 				continue // init-volume intentionally mounts the raw PVC root
 			}
 			mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
@@ -1587,7 +1660,7 @@ func findEnvValue(envVars []any, name string) *string {
 }
 
 // findContainer returns the container with the given name from a Deployment, or nil.
-func findContainer(dep *appsv1.Deployment, name string) *corev1.Container {
+func findContainer(dep *appsv1.Deployment, name string) *corev1.Container { //nolint:unparam
 	for i := range dep.Spec.Template.Spec.Containers {
 		if dep.Spec.Template.Spec.Containers[i].Name == name {
 			return &dep.Spec.Template.Spec.Containers[i]
