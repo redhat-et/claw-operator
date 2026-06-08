@@ -61,9 +61,12 @@ const (
 	GatewayTokenKeyName         = "token"
 	ClawProxyContainerName      = "proxy"
 	ClawGatewayContainerName    = "gateway"
+	ClawInitVolumeContainerName = "init-volume"
 	ClawInitConfigContainerName = "init-config"
 	ClawConfigModeEnvVar        = "CLAW_CONFIG_MODE"
 	DefaultKubectlImage         = "quay.io/openshift/origin-cli:4.21"
+
+	OpenClawImageBase = "ghcr.io/openclaw/openclaw"
 
 	// OpenClaw JSON config keys shared across enrichment functions
 	configKeyGateway   = "gateway"
@@ -810,6 +813,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	objects []*unstructured.Unstructured,
 	resolvedCreds []resolvedCredential,
 ) error {
+	if err := configureClawImage(objects, instance); err != nil {
+		return fmt.Errorf("failed to configure OpenClaw image: %w", err)
+	}
 	if err := configureProxyImage(objects, instance, r.ProxyImage); err != nil {
 		return fmt.Errorf("failed to configure proxy image: %w", err)
 	}

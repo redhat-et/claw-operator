@@ -1819,6 +1819,23 @@ spec:
 
 ---
 
+## OpenClaw Version Override
+
+By default, the operator uses the OpenClaw image tag built into the operator binary. To use a different OpenClaw version without rebuilding the operator, set `spec.version`:
+
+```yaml
+spec:
+  version: "2026.6.1"
+```
+
+This overrides the image tag on all OpenClaw containers (`init-volume`, `init-config`, and `gateway`) while keeping the image name (`ghcr.io/openclaw/openclaw`) fixed. Omit the field to use the operator's built-in default.
+
+The version must match the pattern `^[a-z0-9][a-z0-9._-]*$` (lowercase alphanumeric, dots, dashes, underscores). The plugins init container (`init-plugins`) automatically picks up the overridden image since it reads the gateway container's image at runtime.
+
+> **When to use this:** OpenClaw releases frequently. If a feature or fix requires a newer OpenClaw version than what the operator ships with, `spec.version` lets you upgrade without waiting for an operator rebuild.
+
+---
+
 ## Operator Resource Limits
 
 The operator controller itself has no resource limits set by default. On OpenShift (OLM installs), configure limits via the `Subscription` CR:

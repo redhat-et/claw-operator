@@ -35,6 +35,88 @@ import (
 	clawv1alpha1 "github.com/codeready-toolchain/claw-operator/api/v1alpha1"
 )
 
+// configureClawImage overrides the OpenClaw container image tag on the gateway
+// Deployment when spec.version is set. Affects init-volume, init-config (init
+// containers) and gateway (regular container).
+func configureClawImage(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
+	if instance.Spec.Version == "" {
+		return nil
+	}
+
+	image := OpenClawImageBase + ":" + instance.Spec.Version
+	gatewayName := getClawDeploymentName(instance.Name)
+	clawContainers := map[string]bool{
+		ClawInitVolumeContainerName: true,
+		ClawInitConfigContainerName: true,
+		ClawGatewayContainerName:    true,
+	}
+
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		found := make(map[string]bool, len(clawContainers))
+		paths := [][]string{
+			{"spec", "template", "spec", "initContainers"},
+			{"spec", "template", "spec", "containers"},
+		}
+
+		for _, path := range paths {
+			containers, ok, err := unstructured.NestedSlice(obj.Object, path...)
+			if err != nil {
+				return fmt.Errorf("failed to get %s from %s: %w", path[len(path)-1], obj.GetName(), err)
+			}
+			if !ok {
+				continue
+			}
+			for _, c := range containers {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				name, _, _ := unstructured.NestedString(cm, "name")
+				if clawContainers[name] {
+					found[name] = true
+				}
+			}
+		}
+
+		var missing []string
+		for name := range clawContainers {
+			if !found[name] {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("OpenClaw containers not found in deployment: %v", missing)
+		}
+
+		for _, path := range paths {
+			containers, ok, _ := unstructured.NestedSlice(obj.Object, path...)
+			if !ok {
+				continue
+			}
+			for i, c := range containers {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				name, _, _ := unstructured.NestedString(cm, "name")
+				if clawContainers[name] {
+					cm["image"] = image
+					containers[i] = cm
+				}
+			}
+			if err := unstructured.SetNestedSlice(obj.Object, containers, path...); err != nil {
+				return fmt.Errorf("failed to set %s in %s: %w", path[len(path)-1], obj.GetName(), err)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("claw deployment not found in manifests")
+}
+
 // configureImagePullPolicy overrides imagePullPolicy on all containers in all
 // Deployment objects. If policy is empty, the embedded defaults are preserved.
 func configureImagePullPolicy(objects []*unstructured.Unstructured, policy string) error {
