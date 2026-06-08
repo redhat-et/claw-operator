@@ -1,9 +1,9 @@
 # Image URL to use all building/pushing image targets
-IMG ?= claw-operator:latest
-PROXY_IMG ?= claw-proxy:latest
+IMG ?= quay.io/redhat-et/claw-operator:latest
+PROXY_IMG ?= quay.io/redhat-et/claw-proxy:latest
 KUBECTL_IMG ?= quay.io/openshift/origin-cli:4.21
-BUNDLE_IMG ?= claw-operator-bundle:v$(VERSION)
-CATALOG_IMG ?= claw-operator-catalog:latest
+BUNDLE_IMG ?= quay.io/redhat-et/claw-operator-bundle:v$(VERSION)
+CATALOG_IMG ?= quay.io/redhat-et/claw-operator-catalog:latest
 PLATFORM ?= linux/amd64
 
 # OLM bundle configuration
@@ -226,8 +226,10 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 
 ##@ Dev Deployment
 
+REGISTRY ?= quay.io/redhat-et
+
 # Dev targets derive IMG and PROXY_IMG from REGISTRY and TAG.
-# Usage: make dev-setup REGISTRY=quay.io/myuser
+# Usage: make dev-setup REGISTRY=quay.io/redhat-et
 ifndef TAG
 TAG := dev-$(shell git rev-parse --short HEAD)-$(shell date +%s)
 endif
@@ -235,7 +237,7 @@ endif
 .PHONY: dev-build
 dev-build: ## Build operator and proxy images for dev.
 ifndef REGISTRY
-	$(error REGISTRY is required. Usage: make dev-build REGISTRY=quay.io/myuser)
+	$(error REGISTRY is required. Usage: make dev-build REGISTRY=quay.io/redhat-et)
 endif
 	$(MAKE) container-build IMG=$(REGISTRY)/claw-operator:$(TAG)
 	$(MAKE) container-build-proxy PROXY_IMG=$(REGISTRY)/claw-proxy:$(TAG)
@@ -243,7 +245,7 @@ endif
 .PHONY: dev-push
 dev-push: ## Push operator and proxy images for dev.
 ifndef REGISTRY
-	$(error REGISTRY is required. Usage: make dev-push REGISTRY=quay.io/myuser)
+	$(error REGISTRY is required. Usage: make dev-push REGISTRY=quay.io/redhat-et)
 endif
 	$(MAKE) container-push IMG=$(REGISTRY)/claw-operator:$(TAG)
 	$(MAKE) container-push-proxy PROXY_IMG=$(REGISTRY)/claw-proxy:$(TAG)
@@ -251,7 +253,7 @@ endif
 .PHONY: dev-deploy
 dev-deploy: manifests kustomize ## Install CRDs and deploy controller for dev (uses Always pull policy).
 ifndef REGISTRY
-	$(error REGISTRY is required. Usage: make dev-deploy REGISTRY=quay.io/myuser)
+	$(error REGISTRY is required. Usage: make dev-deploy REGISTRY=quay.io/redhat-et)
 endif
 	$(MAKE) install
 	$(call generate-deploy-overlay,$(REGISTRY)/claw-operator:$(TAG),$(REGISTRY)/claw-proxy:$(TAG),Always)
@@ -261,7 +263,7 @@ endif
 .PHONY: dev-setup
 dev-setup: ## Full dev setup: build, push, and deploy.
 ifndef REGISTRY
-	$(error REGISTRY is required. Usage: make dev-setup REGISTRY=quay.io/myuser)
+	$(error REGISTRY is required. Usage: make dev-setup REGISTRY=quay.io/redhat-et)
 endif
 	$(MAKE) dev-build REGISTRY=$(REGISTRY) TAG=$(TAG)
 	$(MAKE) dev-push REGISTRY=$(REGISTRY) TAG=$(TAG)
@@ -347,7 +349,7 @@ clean-bundle: ## Remove the generated bundle directory.
 
 ##@ CD Pipeline
 
-QUAY_NAMESPACE ?= codeready-toolchain
+QUAY_NAMESPACE ?= redhat-et
 OPERATOR_REPO = quay.io/$(QUAY_NAMESPACE)/claw-operator
 PROXY_REPO = quay.io/$(QUAY_NAMESPACE)/claw-proxy
 BUNDLE_REPO = quay.io/$(QUAY_NAMESPACE)/claw-operator-bundle
@@ -511,4 +513,3 @@ mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $(1)-$(3) $(1)
 endef
-

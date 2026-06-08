@@ -44,11 +44,11 @@ flowchart LR
 ```mermaid
 flowchart LR
   dev["Developer / CI"]
-  dev -->|"make container-build"| img["Operator Image\nquay.io/.../claw-operator:tag"]
-  dev -->|"make container-build-proxy"| proxy["Proxy Image\nquay.io/.../claw-proxy:tag"]
+  dev -->|"make container-build"| img["Operator Image\nquay.io/redhat-et/claw-operator:tag"]
+  dev -->|"make container-build-proxy"| proxy["Proxy Image\nquay.io/redhat-et/claw-proxy:tag"]
   dev -->|"make bundle"| bundleDir["bundle/\nCSV + CRDs + metadata"]
-  bundleDir -->|"podman build -f bundle.Dockerfile"| bundleImg["Bundle Image\nquay.io/.../claw-operator-bundle:version"]
-  bundleImg -->|"opm render + podman build"| catalogImg["Catalog Image\nquay.io/.../claw-operator-catalog:latest"]
+  bundleDir -->|"podman build -f bundle.Dockerfile"| bundleImg["Bundle Image\nquay.io/redhat-et/claw-operator-bundle:version"]
+  bundleImg -->|"opm render + podman build"| catalogImg["Catalog Image\nquay.io/redhat-et/claw-operator-catalog:latest"]
   catalogImg -->|"CatalogSource"| olm["OLM on Cluster"]
   olm -->|"Subscription"| deploy["Operator Deployment"]
 ```
@@ -152,7 +152,7 @@ The OLM deployment model is the production path. Daily development is unchanged:
 | Q3 | CI/CD design | Static bundle validation on PRs; full CD on master push | Fast PR feedback without image push; master always publishable |
 | Q4 | Container file naming | `bundle.Dockerfile` (operator-sdk default) | Avoids fighting the tooling; matches toolchain-cicd expectations |
 | Q5 | Install modes | `OwnNamespace + SingleNamespace` (matches host-operator) | Consistent with host-operator; RBAC controls actual watch scope |
-| Q6 | Catalog image registry | `quay.io/codeready-toolchain/claw-operator-catalog:latest` (ephemeral FBC) | Same registry org as host-operator; fire-and-forget CD model |
+| Q6 | Catalog image registry | `quay.io/redhat-et/claw-operator-catalog:latest` (ephemeral FBC) | Same registry org as the published claw-operator images; fire-and-forget CD model |
 | Q7 | Versioning | Commit-count-based (`0.0.<count>-commit-<sha>`) | Automatic; matches toolchain pattern; deterministic `replaces` from `HEAD^` |
 | Q8 | Channels | `staging` (auto, default) + `alpha` (manual) | Matches toolchain dual-channel setup; `stable` can be added later |
 | Q9 | Scorecard in CI | Static validation in PRs; full scorecard in CD | Balance of speed (no cluster needed for PRs) and thoroughness (cluster in CD) |

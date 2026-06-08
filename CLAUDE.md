@@ -32,7 +32,7 @@ make test-e2e           # Run e2e tests (creates/tears down Kind cluster automat
 make container-build IMG=<registry>/claw-operator:tag
 
 # Dev deployment (OpenShift/Kubernetes)
-make dev-setup REGISTRY=quay.io/myuser           # Build + push + deploy (one command)
+make dev-setup                                   # Build + push + deploy to quay.io/redhat-et
 make dev-build dev-push dev-deploy REGISTRY=...   # Iterate after code changes
 make wait-ready NS=my-claw                        # Wait for ready, print URL + token
 make approve-pairing NS=my-claw                   # List & approve a device pairing request
