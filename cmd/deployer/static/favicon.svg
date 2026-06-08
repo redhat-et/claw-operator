@@ -1,0 +1,19 @@
+<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="openclaw-red" x1="8" y1="8" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff4d4d"/>
+      <stop offset="1" stop-color="#991b1b"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="12" fill="#ffffff"/>
+  <path d="M30 8C17 8 10 19 10 29C10 39 17 49 24 52V57H29V52C31 53 34 53 36 52V57H41V52C48 49 55 39 55 29C55 19 43 8 30 8Z" fill="url(#openclaw-red)"/>
+  <path d="M13 25C5 23 3 29 5 34C8 40 13 37 16 31C18 27 16 25 13 25Z" fill="url(#openclaw-red)"/>
+  <path d="M47 25C56 23 59 29 56 34C53 40 48 37 45 31C43 27 44 25 47 25Z" fill="url(#openclaw-red)"/>
+  <circle cx="23" cy="23" r="3" fill="#050810"/>
+  <circle cx="37" cy="23" r="3" fill="#050810"/>
+  <circle cx="24" cy="22" r="1.2" fill="#00e5cc"/>
+  <circle cx="38" cy="22" r="1.2" fill="#00e5cc"/>
+  <circle cx="45" cy="45" r="14" fill="#316dc9"/>
+  <path d="M39 45H50" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  <path d="M46 39L52 45L46 51" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

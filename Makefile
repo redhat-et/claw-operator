@@ -1,10 +1,14 @@
 # Image URL to use all building/pushing image targets
 IMG ?= quay.io/redhat-et/claw-operator:latest
 PROXY_IMG ?= quay.io/redhat-et/claw-proxy:latest
+DEPLOYER_IMG ?= quay.io/redhat-et/claw-deployer-ui:latest
 KUBECTL_IMG ?= quay.io/openshift/origin-cli:4.21
 BUNDLE_IMG ?= quay.io/redhat-et/claw-operator-bundle:v$(VERSION)
 CATALOG_IMG ?= quay.io/redhat-et/claw-operator-catalog:latest
 PLATFORM ?= linux/amd64
+DEPLOYER_LOCAL_ADDR ?= :18080
+DEPLOYER_LOCAL_USER ?= $(USER)
+DEPLOYER_LOCAL_KUBE_API_SERVER ?= http://127.0.0.1:9
 
 # OLM bundle configuration
 VERSION ?= 0.0.0
@@ -187,8 +191,8 @@ container-push-proxy: ## Push container image for the credential proxy.
 # pull-policy defaults to IfNotPresent; dev-deploy passes Always to force re-pulls.
 define generate-deploy-overlay
 	@rm -rf config/.deploy && mkdir -p config/.deploy
-	@img=$(1); printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n- ../default\nimages:\n- name: controller\n  newName: %s\n  newTag: "%s"\npatches:\n- path: proxy_image_patch.yaml\n  target:\n    kind: Deployment\n' "$${img%:*}" "$${img##*:}" > config/.deploy/kustomization.yaml
-	@printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: controller-manager\nspec:\n  template:\n    spec:\n      containers:\n      - name: manager\n        imagePullPolicy: $(or $(3),IfNotPresent)\n        env:\n        - name: PROXY_IMAGE\n          value: "$(2)"\n        - name: IMAGE_PULL_POLICY\n          value: "$(or $(3),)"\n' > config/.deploy/proxy_image_patch.yaml
+	@printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n- ../default\npatches:\n- path: manager_patch.yaml\n  target:\n    kind: Deployment\n' > config/.deploy/kustomization.yaml
+	@printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: controller-manager\nspec:\n  template:\n    spec:\n      containers:\n      - name: manager\n        image: "$(1)"\n        imagePullPolicy: $(or $(3),IfNotPresent)\n        env:\n        - name: PROXY_IMAGE\n          value: "$(2)"\n        - name: IMAGE_PULL_POLICY\n          value: "$(or $(3),)"\n' > config/.deploy/manager_patch.yaml
 endef
 
 # generate-bundle-overlay creates a temporary kustomize overlay at config/.bundle/
@@ -197,8 +201,8 @@ endef
 # Usage: $(call generate-bundle-overlay,<controller-image>)
 define generate-bundle-overlay
 	@rm -rf config/.bundle && mkdir -p config/.bundle
-	@img=$(1); printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n- ../manifests\nimages:\n- name: controller\n  newName: %s\n  newTag: "%s"\n' \
-		"$${img%:*}" "$${img##*:}" > config/.bundle/kustomization.yaml
+	@printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n- ../manifests\npatches:\n- path: manager_image_patch.yaml\n  target:\n    kind: Deployment\n' > config/.bundle/kustomization.yaml
+	@printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: controller-manager\nspec:\n  template:\n    spec:\n      containers:\n      - name: manager\n        image: "$(1)"\n' > config/.bundle/manager_image_patch.yaml
 endef
 
 ##@ Deployment
@@ -316,6 +320,23 @@ approve-pairing: ## Approve a device pairing request. Usage: make approve-pairin
 dev-cleanup: ## Remove deployed controller and CRDs.
 	$(MAKE) undeploy ignore-not-found=true
 	$(MAKE) uninstall ignore-not-found=true
+
+.PHONY: deployer-build
+deployer-build: ## Build the OpenClaw deployer UI image. Override with DEPLOYER_IMG=...
+	$(CONTAINER_TOOL) build --platform=$(PLATFORM) -f Containerfile.deployer -t $(DEPLOYER_IMG) .
+
+.PHONY: deployer-push
+deployer-push: ## Push the OpenClaw deployer UI image.
+	$(CONTAINER_TOOL) push $(DEPLOYER_IMG)
+
+.PHONY: deployer-run-local
+deployer-run-local: ## Run the OpenClaw deployer UI locally for frontend preview.
+	LISTEN_ADDR=$(DEPLOYER_LOCAL_ADDR) \
+	KUBE_API_SERVER=$(DEPLOYER_LOCAL_KUBE_API_SERVER) \
+	DEVELOPER_BEARER_TOKEN=preview \
+	DEVELOPER_USERNAME=$(DEPLOYER_LOCAL_USER) \
+	OPENCLAW_DEPLOYER_IMPERSONATE=false \
+	go run ./cmd/deployer
 
 ##@ OLM Bundle
 
