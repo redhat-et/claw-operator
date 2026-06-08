@@ -219,6 +219,43 @@ func TestConfigureClawImage(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "claw deployment not found")
 	})
+
+	t.Run("should return error when a required container is missing", func(t *testing.T) {
+		dep := &unstructured.Unstructured{}
+		dep.SetKind(DeploymentKind)
+		dep.SetName(getClawDeploymentName(testInstanceName))
+		dep.Object["spec"] = map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"initContainers": []any{
+						map[string]any{
+							"name":  ClawInitConfigContainerName,
+							"image": "ghcr.io/openclaw/openclaw:old",
+						},
+					},
+					"containers": []any{
+						map[string]any{
+							"name":  ClawGatewayContainerName,
+							"image": "ghcr.io/openclaw/openclaw:old",
+						},
+					},
+				},
+			},
+		}
+
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Version = testClawVersion
+
+		err := configureClawImage([]*unstructured.Unstructured{dep}, instance)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), ClawInitVolumeContainerName)
+
+		containers, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+		gateway := containers[0].(map[string]any)
+		assert.Equal(t, "ghcr.io/openclaw/openclaw:old", gateway["image"],
+			"no containers should be mutated on partial match")
+	})
 }
 
 // --- OpenClaw image override integration test ---

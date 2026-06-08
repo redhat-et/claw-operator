@@ -56,18 +56,47 @@ func configureClawImage(objects []*unstructured.Unstructured, instance *clawv1al
 			continue
 		}
 
-		for _, path := range [][]string{
+		found := make(map[string]bool, len(clawContainers))
+		paths := [][]string{
 			{"spec", "template", "spec", "initContainers"},
 			{"spec", "template", "spec", "containers"},
-		} {
-			containers, found, err := unstructured.NestedSlice(obj.Object, path...)
+		}
+
+		for _, path := range paths {
+			containers, ok, err := unstructured.NestedSlice(obj.Object, path...)
 			if err != nil {
 				return fmt.Errorf("failed to get %s from %s: %w", path[len(path)-1], obj.GetName(), err)
 			}
-			if !found {
+			if !ok {
 				continue
 			}
+			for _, c := range containers {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				name, _, _ := unstructured.NestedString(cm, "name")
+				if clawContainers[name] {
+					found[name] = true
+				}
+			}
+		}
 
+		var missing []string
+		for name := range clawContainers {
+			if !found[name] {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("OpenClaw containers not found in deployment: %v", missing)
+		}
+
+		for _, path := range paths {
+			containers, ok, _ := unstructured.NestedSlice(obj.Object, path...)
+			if !ok {
+				continue
+			}
 			for i, c := range containers {
 				cm, ok := c.(map[string]any)
 				if !ok {
