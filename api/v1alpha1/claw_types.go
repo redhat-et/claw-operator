@@ -563,6 +563,14 @@ type ClawSpec struct {
 	// +optional
 	// +kubebuilder:default=false
 	Idle bool `json:"idle,omitempty"`
+
+	// Version overrides the OpenClaw container image tag for this instance.
+	// When omitted, the operator's built-in default is used. Only the tag
+	// portion is overridden — the image name (ghcr.io/openclaw/openclaw)
+	// is fixed.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Version string `json:"version,omitempty"`
 }
 
 // ClawStatus defines the observed state of Claw

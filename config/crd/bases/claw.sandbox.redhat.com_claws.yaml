@@ -760,6 +760,14 @@ spec:
                   workspace/skills/<name>/SKILL.md, overwritten on every pod restart
                   (operator-managed).
                 type: object
+              version:
+                description: |-
+                  Version overrides the OpenClaw container image tag for this instance.
+                  When omitted, the operator's built-in default is used. Only the tag
+                  portion is overridden — the image name (ghcr.io/openclaw/openclaw)
+                  is fixed.
+                pattern: ^[a-z0-9][a-z0-9._-]*$
+                type: string
               webFetch:
                 description: |-
                   WebFetch enables the web_fetch tool for arbitrary URL fetching.

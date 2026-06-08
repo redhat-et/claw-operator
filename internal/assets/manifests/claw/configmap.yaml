@@ -367,6 +367,11 @@ data:
       Routes. Application settings (diagnostics, CORS origins, model preferences,
       agent defaults) can be set declaratively via `spec.config.raw` in the CR.
       Non-operator-managed config can also be managed via `openclaw config patch`.
+    - **Version override:** `spec.version` overrides the OpenClaw image tag for this
+      instance (e.g., `version: "2026.6.1"`). When omitted, the operator's built-in
+      default is used. Only the tag is overridden — the image name is fixed. If the
+      user asks how to upgrade OpenClaw without rebuilding the operator, this is the
+      answer.
     - **You cannot read or modify the Claw CR.** Even if a `type: kubernetes`
       credential is configured, it is not meant for managing this OpenClaw instance.
       Always guide the user on what CR changes to make — provide the correct YAML
