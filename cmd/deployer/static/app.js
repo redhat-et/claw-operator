@@ -3,6 +3,8 @@ const state = {
   provider: localStorage.getItem("openclaw-deployer.provider") || "openrouter",
   selectedName: localStorage.getItem("openclaw-deployer.name") || "instance",
   model: localStorage.getItem("openclaw-deployer.model") || "",
+  gcpProject: localStorage.getItem("openclaw-deployer.gcpProject") || "",
+  gcpLocation: localStorage.getItem("openclaw-deployer.gcpLocation") || "",
   claws: [],
   exists: false,
   ready: false,
@@ -10,7 +12,9 @@ const state = {
 
 const modelDefaults = {
   anthropic: "anthropic/claude-sonnet-4-6",
+  "anthropic-vertex": "anthropic-vertex/claude-sonnet-4-6",
   google: "google/gemini-3.1-pro-preview",
+  "google-vertex": "google/gemini-3.1-pro-preview",
   openai: "openai/gpt-5.5",
   openrouter: "openrouter/anthropic/claude-sonnet-4-6",
   xai: "xai/grok-4.3",
@@ -18,10 +22,19 @@ const modelDefaults = {
 
 const modelOptions = {
   anthropic: ["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5"],
+  "anthropic-vertex": ["anthropic-vertex/claude-sonnet-4-6", "anthropic-vertex/claude-opus-4-8", "anthropic-vertex/claude-opus-4-7"],
   google: ["google/gemini-3.1-pro-preview", "google/gemini-3.5-flash", "google/gemini-3.1-flash-lite"],
+  "google-vertex": ["google/gemini-3.1-pro-preview", "google/gemini-3.5-flash", "google/gemini-3.1-flash-lite"],
   openai: ["openai/gpt-5.5", "openai/gpt-5.4", "openai/gpt-5.4-mini"],
   openrouter: ["openrouter/anthropic/claude-sonnet-4-6", "openrouter/openai/gpt-5.5", "openrouter/google/gemini-3.5-flash", "openrouter/auto"],
   xai: ["xai/grok-4.3", "xai/grok-4.20"],
+};
+
+const googleVertexProviders = new Set(["anthropic-vertex", "google-vertex"]);
+
+const defaultGCPLocations = {
+  "anthropic-vertex": "us-east5",
+  "google-vertex": "us-central1",
 };
 
 const els = {
@@ -32,7 +45,13 @@ const els = {
   provider: document.getElementById("provider"),
   model: document.getElementById("model"),
   modelOptions: document.getElementById("model-options"),
+  gcpProjectRow: document.getElementById("gcp-project-row"),
+  gcpLocationRow: document.getElementById("gcp-location-row"),
+  gcpProject: document.getElementById("gcpProject"),
+  gcpLocation: document.getElementById("gcpLocation"),
+  credentialLabel: document.getElementById("credential-label"),
   apiKey: document.getElementById("apiKey"),
+  gcpCredentials: document.getElementById("gcpCredentials"),
   status: document.getElementById("status"),
   running: document.getElementById("running"),
   clawList: document.getElementById("claw-list"),
@@ -45,7 +64,10 @@ els.namespace.value = state.namespace;
 els.clawName.value = state.selectedName;
 els.provider.value = state.provider;
 els.model.value = state.model || modelDefaults[state.provider] || "";
+els.gcpProject.value = state.gcpProject;
+els.gcpLocation.value = state.gcpLocation || defaultGCPLocations[state.provider] || "";
 renderModelOptions();
+renderCredentialFields();
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -83,10 +105,14 @@ async function refresh() {
   state.selectedName = els.clawName.value.trim() || "instance";
   state.provider = els.provider.value;
   state.model = els.model.value.trim() || modelDefaults[state.provider] || "";
+  state.gcpProject = els.gcpProject.value.trim();
+  state.gcpLocation = els.gcpLocation.value.trim();
   localStorage.setItem("openclaw-deployer.namespace", state.namespace);
   localStorage.setItem("openclaw-deployer.name", state.selectedName);
   localStorage.setItem("openclaw-deployer.provider", state.provider);
   localStorage.setItem("openclaw-deployer.model", state.model);
+  localStorage.setItem("openclaw-deployer.gcpProject", state.gcpProject);
+  localStorage.setItem("openclaw-deployer.gcpLocation", state.gcpLocation);
 
   if (!state.namespace) {
     setStatus("Choose the namespace where your OpenClaw should run.");
@@ -174,6 +200,18 @@ function renderModelOptions() {
   }
 }
 
+function renderCredentialFields() {
+  const isGoogleVertex = googleVertexProviders.has(els.provider.value);
+  els.gcpProjectRow.hidden = !isGoogleVertex;
+  els.gcpLocationRow.hidden = !isGoogleVertex;
+  els.credentialLabel.textContent = isGoogleVertex ? "Service Account Key" : "API key";
+  els.apiKey.hidden = isGoogleVertex;
+  els.gcpCredentials.hidden = !isGoogleVertex;
+  if (isGoogleVertex && !els.gcpLocation.value.trim()) {
+    els.gcpLocation.value = defaultGCPLocations[els.provider.value] || "";
+  }
+}
+
 function setStatus(message, isError = false) {
   els.status.textContent = message;
   els.status.style.color = isError ? "#b42318" : "";
@@ -190,10 +228,21 @@ els.provision.addEventListener("click", async () => {
   const name = els.clawName.value.trim();
   const provider = els.provider.value;
   const model = els.model.value.trim();
-  const apiKey = els.apiKey.value.trim();
+  const isGoogleVertex = googleVertexProviders.has(provider);
+  const apiKey = (isGoogleVertex ? els.gcpCredentials.value : els.apiKey.value).trim();
+  const gcpProject = els.gcpProject.value.trim();
+  const gcpLocation = els.gcpLocation.value.trim();
 
   if (!namespace || !name || !model || !apiKey) {
-    setStatus("Namespace, OpenClaw name, model, and API key are required.", true);
+    setStatus(`Namespace, OpenClaw name, model, and ${isGoogleVertex ? "service account JSON" : "API key"} are required.`, true);
+    return;
+  }
+  if (isGoogleVertex && (!gcpProject || !gcpLocation)) {
+    setStatus("GCP project and region are required.", true);
+    return;
+  }
+  if (isGoogleVertex && !isSupportedGCPKey(apiKey)) {
+    setStatus('Valid JSON with type "service_account" or "authorized_user" is required.', true);
     return;
   }
 
@@ -202,9 +251,10 @@ els.provision.addEventListener("click", async () => {
   try {
     const current = await api("/api/provision", {
       method: "POST",
-      body: JSON.stringify({ namespace, name, provider, model, apiKey }),
+      body: JSON.stringify({ namespace, name, provider, model, apiKey, gcpProject, gcpLocation }),
     });
     els.apiKey.value = "";
+    els.gcpCredentials.value = "";
     state.selectedName = current.name || name;
     els.clawName.value = state.selectedName;
     await refresh();
@@ -253,16 +303,34 @@ els.provider.addEventListener("change", () => {
   const previousDefault = modelDefaults[state.provider] || "";
   state.provider = els.provider.value;
   renderModelOptions();
+  renderCredentialFields();
   if (!els.model.value.trim() || els.model.value.trim() === previousDefault) {
     els.model.value = modelDefaults[state.provider] || "";
   }
   localStorage.setItem("openclaw-deployer.provider", state.provider);
   localStorage.setItem("openclaw-deployer.model", els.model.value.trim());
 });
+els.gcpProject.addEventListener("change", () => {
+  state.gcpProject = els.gcpProject.value.trim();
+  localStorage.setItem("openclaw-deployer.gcpProject", state.gcpProject);
+});
+els.gcpLocation.addEventListener("change", () => {
+  state.gcpLocation = els.gcpLocation.value.trim();
+  localStorage.setItem("openclaw-deployer.gcpLocation", state.gcpLocation);
+});
 els.model.addEventListener("change", () => {
   state.model = els.model.value.trim();
   localStorage.setItem("openclaw-deployer.model", state.model);
 });
+
+function isSupportedGCPKey(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed.type === "service_account" || parsed.type === "authorized_user";
+  } catch {
+    return false;
+  }
+}
 
 init();
 setInterval(() => {

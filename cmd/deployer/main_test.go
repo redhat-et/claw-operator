@@ -220,10 +220,13 @@ func TestNormalizeModelRef(t *testing.T) {
 		model    string
 		want     string
 	}{
-		"openrouter nested": {provider: "openrouter", model: "anthropic/claude-sonnet-4-6", want: "openrouter/anthropic/claude-sonnet-4-6"},
-		"openrouter full":   {provider: "openrouter", model: "openrouter/auto", want: "openrouter/auto"},
-		"anthropic bare":    {provider: "anthropic", model: "claude-sonnet-4-6", want: "anthropic/claude-sonnet-4-6"},
-		"google empty":      {provider: "google", model: "", want: "google/gemini-3.1-pro-preview"},
+		"openrouter nested":                     {provider: "openrouter", model: "anthropic/claude-sonnet-4-6", want: "openrouter/anthropic/claude-sonnet-4-6"},
+		"openrouter full":                       {provider: "openrouter", model: "openrouter/auto", want: "openrouter/auto"},
+		"anthropic bare":                        {provider: "anthropic", model: "claude-sonnet-4-6", want: "anthropic/claude-sonnet-4-6"},
+		"anthropic vertex bare":                 {provider: "anthropic-vertex", model: "claude-sonnet-4-6", want: "anthropic-vertex/claude-sonnet-4-6"},
+		"anthropic vertex remaps direct prefix": {provider: "anthropic-vertex", model: "anthropic/claude-sonnet-4-6", want: "anthropic-vertex/claude-sonnet-4-6"},
+		"google empty":                          {provider: "google", model: "", want: "google/gemini-3.1-pro-preview"},
+		"google vertex empty":                   {provider: "google-vertex", model: "", want: "google/gemini-3.1-pro-preview"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -231,6 +234,56 @@ func TestNormalizeModelRef(t *testing.T) {
 				t.Fatalf("normalizeModelRef(%q, %q) = %q, want %q", tt.provider, tt.model, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestProviderCredentialForVertex(t *testing.T) {
+	req := provisionRequest{
+		Name:        "instance",
+		Provider:    "anthropic-vertex",
+		GCPProject:  "my-project",
+		GCPLocation: "us-east5",
+	}
+	credential := providerCredentialForRequest(req)
+	if credential["name"] != "anthropic-vertex" {
+		t.Fatalf("name = %#v", credential["name"])
+	}
+	if credential["provider"] != "anthropic" {
+		t.Fatalf("provider = %#v", credential["provider"])
+	}
+	if credential["type"] != "gcp" {
+		t.Fatalf("type = %#v", credential["type"])
+	}
+	secretRefs := credential["secretRef"].([]map[string]string)
+	if secretRefs[0]["name"] != "openclaw-instance-anthropic-vertex-gcp" {
+		t.Fatalf("secret name = %#v", secretRefs[0]["name"])
+	}
+	if secretRefs[0]["key"] != gcpSecretKey {
+		t.Fatalf("secret key = %#v", secretRefs[0]["key"])
+	}
+	gcp := credential["gcp"].(map[string]string)
+	if gcp["project"] != "my-project" || gcp["location"] != "us-east5" {
+		t.Fatalf("gcp = %#v", gcp)
+	}
+}
+
+func TestValidateGCPServiceAccountJSON(t *testing.T) {
+	for _, value := range []string{
+		`{"type":"service_account"}`,
+		`{"type":"authorized_user"}`,
+	} {
+		if err := validateGCPServiceAccountJSON(value); err != nil {
+			t.Fatalf("expected %s to be valid: %v", value, err)
+		}
+	}
+	for _, value := range []string{
+		`{"type":"external_account"}`,
+		`not-json`,
+		`{}`,
+	} {
+		if err := validateGCPServiceAccountJSON(value); err == nil {
+			t.Fatalf("expected %s to be invalid", value)
+		}
 	}
 }
 

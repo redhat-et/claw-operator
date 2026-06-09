@@ -58,7 +58,9 @@
                   <option value="openrouter">OpenRouter</option>
                   <option value="openai">OpenAI</option>
                   <option value="google">Google Gemini</option>
+                  <option value="google-vertex">Google Vertex AI (Gemini)</option>
                   <option value="anthropic">Anthropic</option>
+                  <option value="anthropic-vertex">Google Vertex AI (Claude)</option>
                   <option value="xai">xAI</option>
                 </select>
               </label>
@@ -67,9 +69,18 @@
                 <input id="model" name="model" required autocomplete="off" list="model-options" value="openrouter/anthropic/claude-sonnet-4-6">
                 <datalist id="model-options"></datalist>
               </label>
+              <label id="gcp-project-row" hidden>
+                GCP Project ID
+                <input id="gcpProject" name="gcpProject" autocomplete="off" placeholder="your-project-id">
+              </label>
+              <label id="gcp-location-row" hidden>
+                GCP region
+                <input id="gcpLocation" name="gcpLocation" autocomplete="off" placeholder="us-east5">
+              </label>
               <label id="api-key-row">
-                API key
+                <span id="credential-label">API key</span>
                 <input id="apiKey" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste provider key">
+                <textarea id="gcpCredentials" name="gcpCredentials" class="credential-json" autocomplete="off" spellcheck="false" rows="6" placeholder="Paste your service account JSON key" hidden></textarea>
               </label>
             </form>
 
