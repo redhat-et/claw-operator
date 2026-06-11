@@ -870,7 +870,15 @@ func (r *ClawResourceReconciler) configureDeployments(
 func (r *ClawResourceReconciler) applyProxyResources(ctx context.Context, instance *clawv1alpha1.Claw, resolvedCreds []resolvedCredential) ([]byte, error) {
 	logger := log.FromContext(ctx)
 
-	proxyConfigJSON, err := generateProxyConfig(resolvedCreds, instance.Spec.McpServers, instance.Spec.WebSearch)
+	var builtinAllowlist *[]string
+	if instance.Spec.Network != nil {
+		builtinAllowlist = instance.Spec.Network.BuiltinPassthroughs
+	}
+	builtins, unrecognized := filterBuiltinPassthroughs(builtinAllowlist)
+	if len(unrecognized) > 0 {
+		logger.Info("builtinPassthroughs contains unrecognized domains (possible typo)", "unrecognized", unrecognized)
+	}
+	proxyConfigJSON, err := generateProxyConfig(resolvedCreds, instance.Spec.McpServers, instance.Spec.WebSearch, builtins)
 	if err != nil {
 		logger.Error(err, "Failed to generate proxy config")
 		setCondition(instance, clawv1alpha1.ConditionTypeProxyConfigured, metav1.ConditionFalse, clawv1alpha1.ConditionReasonConfigFailed, err.Error())

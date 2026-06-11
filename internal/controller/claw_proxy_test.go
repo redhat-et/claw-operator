@@ -176,7 +176,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -205,7 +205,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -231,7 +231,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -260,7 +260,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -293,7 +293,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -323,7 +323,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -349,7 +349,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -377,7 +377,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -407,7 +407,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -437,7 +437,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -463,7 +463,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -490,7 +490,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -520,7 +520,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -559,7 +559,7 @@ func TestGenerateProxyConfig(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -614,7 +614,7 @@ func TestGenerateProxyConfigArbitraryProvider(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -639,7 +639,7 @@ func TestGenerateProxyConfigArbitraryProvider(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -652,7 +652,7 @@ func TestGenerateProxyConfigArbitraryProvider(t *testing.T) {
 
 func TestBuiltinPassthroughDomains(t *testing.T) {
 	t.Run("should include clawhub.ai as none route with no credentials", func(t *testing.T) {
-		data, err := generateProxyConfig(nil, nil, nil)
+		data, err := generateProxyConfig(nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -663,7 +663,7 @@ func TestBuiltinPassthroughDomains(t *testing.T) {
 	})
 
 	t.Run("should include openrouter.ai as none route with no credentials", func(t *testing.T) {
-		data, err := generateProxyConfig(nil, nil, nil)
+		data, err := generateProxyConfig(nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -674,7 +674,7 @@ func TestBuiltinPassthroughDomains(t *testing.T) {
 	})
 
 	t.Run("should include raw.githubusercontent.com with path restriction", func(t *testing.T) {
-		data, err := generateProxyConfig(nil, nil, nil)
+		data, err := generateProxyConfig(nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -685,7 +685,7 @@ func TestBuiltinPassthroughDomains(t *testing.T) {
 	})
 
 	t.Run("should include registry.npmjs.org as none route with no credentials", func(t *testing.T) {
-		data, err := generateProxyConfig(nil, nil, nil)
+		data, err := generateProxyConfig(nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -696,7 +696,7 @@ func TestBuiltinPassthroughDomains(t *testing.T) {
 	})
 
 	t.Run("should have no path restriction on unrestricted builtins", func(t *testing.T) {
-		data, err := generateProxyConfig(nil, nil, nil)
+		data, err := generateProxyConfig(nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -717,7 +717,7 @@ func TestBuiltinPassthroughDomains(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -745,7 +745,7 @@ func TestBuiltinPassthroughDomains(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -760,6 +760,168 @@ func TestBuiltinPassthroughDomains(t *testing.T) {
 
 		route := findRouteByDomain(t, cfg.Routes, "openrouter.ai")
 		assert.Equal(t, "bearer", route.Injector, "user credential should take precedence")
+	})
+}
+
+func TestFilterBuiltinPassthroughs(t *testing.T) {
+	t.Run("nil allowlist returns all builtins", func(t *testing.T) {
+		filtered, unrecognized := filterBuiltinPassthroughs(nil)
+		assert.Equal(t, builtinPassthroughDomains, filtered)
+		assert.Empty(t, unrecognized)
+	})
+
+	t.Run("empty allowlist blocks all builtins", func(t *testing.T) {
+		empty := []string{}
+		filtered, unrecognized := filterBuiltinPassthroughs(&empty)
+		assert.Empty(t, filtered)
+		assert.Empty(t, unrecognized)
+	})
+
+	t.Run("allowlist keeps only listed domains", func(t *testing.T) {
+		allow := []string{"clawhub.ai", "github.com"}
+		filtered, unrecognized := filterBuiltinPassthroughs(&allow)
+		require.Len(t, filtered, 2)
+		assert.Equal(t, "clawhub.ai", filtered[0].Domain)
+		assert.Equal(t, "github.com", filtered[1].Domain)
+		assert.Empty(t, unrecognized)
+	})
+
+	t.Run("preserves path restrictions on allowed domains", func(t *testing.T) {
+		allow := []string{"raw.githubusercontent.com"}
+		filtered, unrecognized := filterBuiltinPassthroughs(&allow)
+		require.Len(t, filtered, 1)
+		assert.Equal(t, "raw.githubusercontent.com", filtered[0].Domain)
+		assert.Equal(t, []string{"/BerriAI/litellm/", "/WhiskeySockets/Baileys/"}, filtered[0].AllowedPaths)
+		assert.Empty(t, unrecognized)
+	})
+
+	t.Run("returns unrecognized domains", func(t *testing.T) {
+		allow := []string{"clawhub.ai", "unknown.example.com", "typo.ai"}
+		filtered, unrecognized := filterBuiltinPassthroughs(&allow)
+		require.Len(t, filtered, 1)
+		assert.Equal(t, "clawhub.ai", filtered[0].Domain)
+		require.Len(t, unrecognized, 2)
+		assert.Equal(t, "unknown.example.com", unrecognized[0])
+		assert.Equal(t, "typo.ai", unrecognized[1])
+	})
+}
+
+func TestBuiltinPassthroughAllowlist(t *testing.T) {
+	t.Run("should include all builtins when allowlist is nil", func(t *testing.T) {
+		data, err := generateProxyConfig(nil, nil, nil, nil)
+		require.NoError(t, err)
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal(data, &cfg))
+		assert.Len(t, cfg.Routes, len(builtinPassthroughDomains))
+	})
+
+	t.Run("should block all builtins when allowlist is empty", func(t *testing.T) {
+		empty := []string{}
+		builtins, _ := filterBuiltinPassthroughs(&empty)
+		data, err := generateProxyConfig(nil, nil, nil, builtins)
+		require.NoError(t, err)
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal(data, &cfg))
+		assert.Empty(t, cfg.Routes)
+	})
+
+	t.Run("should allow only listed builtins", func(t *testing.T) {
+		allow := []string{"clawhub.ai", "github.com"}
+		builtins, _ := filterBuiltinPassthroughs(&allow)
+		data, err := generateProxyConfig(nil, nil, nil, builtins)
+		require.NoError(t, err)
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal(data, &cfg))
+		require.Len(t, cfg.Routes, 2)
+
+		domains := make(map[string]bool)
+		for _, r := range cfg.Routes {
+			domains[r.Domain] = true
+		}
+		assert.True(t, domains["clawhub.ai"])
+		assert.True(t, domains["github.com"])
+		assert.False(t, domains["registry.npmjs.org"])
+	})
+
+	t.Run("credential routes still present when builtins are blocked", func(t *testing.T) {
+		empty := []string{}
+		builtins, _ := filterBuiltinPassthroughs(&empty)
+		credentials := []clawv1alpha1.CredentialSpec{
+			{
+				Name:   "anthropic",
+				Type:   clawv1alpha1.CredentialTypeAPIKey,
+				Domain: "api.anthropic.com",
+				SecretRef: []clawv1alpha1.SecretRefEntry{{
+					Name: "anthropic-secret",
+					Key:  "api-key",
+				}},
+				APIKey: &clawv1alpha1.APIKeyConfig{Header: "x-api-key"},
+			},
+		}
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, builtins)
+		require.NoError(t, err)
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal(data, &cfg))
+		require.Len(t, cfg.Routes, 1)
+		assert.Equal(t, "api.anthropic.com", cfg.Routes[0].Domain)
+	})
+
+	t.Run("credential shadowing still works with allowlist", func(t *testing.T) {
+		allow := []string{"clawhub.ai", "openrouter.ai"}
+		builtins, _ := filterBuiltinPassthroughs(&allow)
+		credentials := []clawv1alpha1.CredentialSpec{
+			{
+				Name:   "openrouter",
+				Type:   clawv1alpha1.CredentialTypeBearer,
+				Domain: "openrouter.ai",
+				SecretRef: []clawv1alpha1.SecretRefEntry{{
+					Name: "or-secret",
+					Key:  "api-key",
+				}},
+				Provider: "openrouter",
+			},
+		}
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, builtins)
+		require.NoError(t, err)
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal(data, &cfg))
+
+		counts := make(map[string]int)
+		for _, r := range cfg.Routes {
+			counts[r.Domain]++
+		}
+		assert.Equal(t, 1, counts["openrouter.ai"], "should not duplicate when credential shadows allowed builtin")
+
+		route := findRouteByDomain(t, cfg.Routes, "openrouter.ai")
+		assert.Equal(t, "bearer", route.Injector, "credential should take precedence over builtin")
+	})
+
+	t.Run("credential for blocked builtin domain still produces a route", func(t *testing.T) {
+		allow := []string{"clawhub.ai"}
+		builtins, _ := filterBuiltinPassthroughs(&allow)
+		credentials := []clawv1alpha1.CredentialSpec{
+			{
+				Name:   "npm-mirror",
+				Type:   clawv1alpha1.CredentialTypeNone,
+				Domain: "registry.npmjs.org",
+			},
+		}
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, builtins)
+		require.NoError(t, err)
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal(data, &cfg))
+		require.Len(t, cfg.Routes, 2, "credential route + one allowed builtin")
+
+		route := findRouteByDomain(t, cfg.Routes, "registry.npmjs.org")
+		assert.Equal(t, "none", route.Injector, "credential route should be present even though builtin is blocked")
+		route = findRouteByDomain(t, cfg.Routes, "clawhub.ai")
+		assert.Equal(t, "none", route.Injector, "allowed builtin should still be present")
 	})
 }
 
@@ -896,6 +1058,63 @@ func TestOpenClawProxyConfigMap(t *testing.T) {
 	})
 }
 
+// --- Builtin passthrough integration tests (envtest) ---
+
+func TestBuiltinPassthroughAllowlistIntegration(t *testing.T) {
+	t.Run("should restrict proxy config to allowed builtins after reconciliation", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		allow := []string{"clawhub.ai", "github.com"}
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Namespace = namespace
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{
+				Name:     "gemini",
+				Type:     clawv1alpha1.CredentialTypeAPIKey,
+				Provider: "google",
+				SecretRef: []clawv1alpha1.SecretRefEntry{
+					{Name: aiModelSecret, Key: aiModelSecretKey},
+				},
+				Domain: ".googleapis.com",
+				APIKey: &clawv1alpha1.APIKeyConfig{Header: "x-goog-api-key"},
+			},
+		}
+		instance.Spec.Network = &clawv1alpha1.NetworkSpec{
+			BuiltinPassthroughs: &allow,
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		cm := &corev1.ConfigMap{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getProxyConfigMapName(testInstanceName),
+				Namespace: namespace,
+			}, cm) == nil
+		}, "proxy config ConfigMap should be created")
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal([]byte(cm.Data["proxy-config.json"]), &cfg))
+
+		domains := make(map[string]bool)
+		for _, r := range cfg.Routes {
+			domains[r.Domain] = true
+		}
+
+		assert.True(t, domains["clawhub.ai"], "allowed builtin should be present")
+		assert.True(t, domains["github.com"], "allowed builtin should be present")
+		assert.True(t, domains[".googleapis.com"], "credential route should be present")
+		assert.False(t, domains["openrouter.ai"], "blocked builtin should be absent")
+		assert.False(t, domains["registry.npmjs.org"], "blocked builtin should be absent")
+	})
+}
+
 // --- Proxy config Vertex SDK tests ---
 
 func TestGenerateProxyConfigVertexSDK(t *testing.T) {
@@ -917,7 +1136,7 @@ func TestGenerateProxyConfigVertexSDK(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -960,7 +1179,7 @@ func TestGenerateProxyConfigVertexSDK(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1267,7 +1486,7 @@ func TestGenerateProxyConfigKubernetes(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(creds, nil, nil)
+		data, err := generateProxyConfig(creds, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1292,7 +1511,7 @@ func TestGenerateProxyConfigKubernetes(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(creds, nil, nil)
+		data, err := generateProxyConfig(creds, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1318,7 +1537,7 @@ func TestGenerateProxyConfigKubernetes(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(creds, nil, nil)
+		data, err := generateProxyConfig(creds, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1342,7 +1561,7 @@ func TestMcpServerDomainExtraction(t *testing.T) {
 			"context7": {URL: "https://mcp.context7.com/mcp", Transport: clawv1alpha1.McpTransportStreamableHTTP},
 		}
 
-		data, err := generateProxyConfig(nil, mcpServers, nil)
+		data, err := generateProxyConfig(nil, mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1367,7 +1586,7 @@ func TestMcpServerDomainExtraction(t *testing.T) {
 			"example": {URL: "https://mcp.example.com/mcp"},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil)
+		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1387,7 +1606,7 @@ func TestMcpServerDomainExtraction(t *testing.T) {
 			"npm-mcp": {URL: "https://registry.npmjs.org/mcp"},
 		}
 
-		data, err := generateProxyConfig(nil, mcpServers, nil)
+		data, err := generateProxyConfig(nil, mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1410,7 +1629,7 @@ func TestMcpServerDomainExtraction(t *testing.T) {
 			},
 		}
 
-		data, err := generateProxyConfig(nil, mcpServers, nil)
+		data, err := generateProxyConfig(nil, mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1424,7 +1643,7 @@ func TestMcpServerDomainExtraction(t *testing.T) {
 			"bad": {URL: "://not-a-url"},
 		}
 
-		data, err := generateProxyConfig(nil, mcpServers, nil)
+		data, err := generateProxyConfig(nil, mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1439,7 +1658,7 @@ func TestMcpServerDomainExtraction(t *testing.T) {
 			"svc2": {URL: "https://api.example.com/mcp2"},
 		}
 
-		data, err := generateProxyConfig(nil, mcpServers, nil)
+		data, err := generateProxyConfig(nil, mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1459,7 +1678,7 @@ func TestMcpServerDomainExtraction(t *testing.T) {
 			"upper": {URL: "https://MCP.Example.COM/api"},
 		}
 
-		data, err := generateProxyConfig(nil, mcpServers, nil)
+		data, err := generateProxyConfig(nil, mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1485,7 +1704,7 @@ func TestMcpServerDomainExtraction(t *testing.T) {
 			"vertex": {URL: "https://us-central1-aiplatform.googleapis.com/mcp"},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil)
+		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1525,7 +1744,7 @@ func TestMcpCredentialRefRoutes(t *testing.T) {
 			"my-server": {URL: "http://mcp-server:8080/mcp", CredentialRef: "mcp-auth"},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil)
+		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1555,7 +1774,7 @@ func TestMcpCredentialRefRoutes(t *testing.T) {
 			"unauthed": {URL: "http://other-server:8080/mcp"},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil)
+		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1577,7 +1796,7 @@ func TestMcpCredentialRefRoutes(t *testing.T) {
 			"my-server": {URL: "http://mcp-server:8080/mcp", CredentialRef: "nonexistent"},
 		}
 
-		_, err := generateProxyConfig(nil, mcpServers, nil)
+		_, err := generateProxyConfig(nil, mcpServers, nil, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "nonexistent")
 	})
@@ -1595,7 +1814,7 @@ func TestMcpCredentialRefRoutes(t *testing.T) {
 			"my-server": {URL: "http://mcp-server:8080/mcp", CredentialRef: "mcp-auth"},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil)
+		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -1625,7 +1844,7 @@ func TestMcpCredentialRefRoutes(t *testing.T) {
 			"my-server": {URL: "http://mcp-server:8080/mcp", CredentialRef: "mcp-key"},
 		}
 
-		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil)
+		data, err := generateProxyConfig(toResolved(credentials), mcpServers, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig

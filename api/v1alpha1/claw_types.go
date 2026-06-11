@@ -433,6 +433,16 @@ type NetworkSpec struct {
 	// Rules are appended to {instance}-egress.
 	// +optional
 	AdditionalEgress []networkingv1.NetworkPolicyEgressRule `json:"additionalEgress,omitempty"`
+
+	// BuiltinPassthroughs controls which builtin passthrough domains the
+	// proxy allows without credential injection. When nil (default), all
+	// builtin domains are allowed for backward compatibility. When set,
+	// only the listed domains are allowed — omitted builtins are blocked.
+	// An empty list blocks all builtin passthroughs.
+	// Known builtins: clawhub.ai, openrouter.ai, github.com,
+	// codeload.github.com, raw.githubusercontent.com, registry.npmjs.org.
+	// +optional
+	BuiltinPassthroughs *[]string `json:"builtinPassthroughs,omitempty"`
 }
 
 // CustomProviderAPI selects the wire format for a custom provider.

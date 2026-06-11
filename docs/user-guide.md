@@ -1555,6 +1555,42 @@ The operator auto-generates an egress rule targeting the `shared-tools` namespac
 
 **Stdio MCP servers** (subprocess, no URL) need no NetworkPolicy changes.
 
+### Builtin passthrough control
+
+The proxy allows several domains by default without credential
+injection (clawhub.ai, openrouter.ai, github.com,
+codeload.github.com, raw.githubusercontent.com,
+registry.npmjs.org). On locked-down clusters, use
+`spec.network.builtinPassthroughs` to control which are allowed:
+
+```yaml
+spec:
+  network:
+    builtinPassthroughs:
+      - clawhub.ai
+      - github.com
+      - codeload.github.com
+```
+
+This is an **allowlist**: only listed domains are permitted;
+omitted builtins are blocked. When the field is absent (default),
+all builtins are allowed for backward compatibility. An empty
+list (`builtinPassthroughs: []`) blocks all builtin domains.
+
+To replace a blocked registry with an internal mirror, add a
+`type: none` credential entry:
+
+```yaml
+spec:
+  network:
+    builtinPassthroughs:
+      - clawhub.ai
+  credentials:
+    - name: internal-npm
+      type: none
+      domain: npm.corp.internal
+```
+
 ### Escape hatch: `spec.network.additionalEgress`
 
 For services the operator cannot auto-detect — tracing collectors, databases, webhooks — use `spec.network.additionalEgress` to append raw `NetworkPolicyEgressRule` objects to the gateway egress NetworkPolicy:

@@ -111,6 +111,37 @@ var builtinPassthroughDomains = []builtinPassthrough{
 	{Domain: "registry.npmjs.org"},
 }
 
+// filterBuiltinPassthroughs returns the subset of builtinPassthroughDomains
+// allowed by the given allowlist, plus any allowlist entries that don't match
+// a known builtin (for caller-side warning). When allowlist is nil, all builtins
+// are returned (backward compatible). When non-nil, only domains present in the
+// list are kept; an empty list blocks all builtins.
+func filterBuiltinPassthroughs(allowlist *[]string) (filtered []builtinPassthrough, unrecognized []string) {
+	if allowlist == nil {
+		return builtinPassthroughDomains, nil
+	}
+	// Initialize as non-nil empty slice so generateProxyConfig can distinguish
+	// "empty allowlist" (block all) from "no allowlist" (nil = use defaults).
+	filtered = []builtinPassthrough{}
+	allowed := make(map[string]bool, len(*allowlist))
+	for _, d := range *allowlist {
+		allowed[d] = true
+	}
+	knownDomains := make(map[string]bool, len(builtinPassthroughDomains))
+	for _, bp := range builtinPassthroughDomains {
+		knownDomains[bp.Domain] = true
+		if allowed[bp.Domain] {
+			filtered = append(filtered, bp)
+		}
+	}
+	for _, d := range *allowlist {
+		if !knownDomains[d] {
+			unrecognized = append(unrecognized, d)
+		}
+	}
+	return filtered, unrecognized
+}
+
 // generateProxyConfig builds the proxy config JSON from resolved credentials.
 // HTTP MCP server URLs are auto-extracted as passthrough routes when not already
 // covered by a credential or builtin domain.
@@ -119,7 +150,11 @@ func generateProxyConfig(
 	credentials []resolvedCredential,
 	mcpServers map[string]clawv1alpha1.McpServerSpec,
 	webSearch *clawv1alpha1.WebSearchSpec,
+	builtins []builtinPassthrough,
 ) ([]byte, error) {
+	if builtins == nil {
+		builtins = builtinPassthroughDomains
+	}
 	var exact []proxyRoute
 
 	coveredDomains := make(map[string]bool)
@@ -127,7 +162,7 @@ func generateProxyConfig(
 		coveredDomains[strings.ToLower(rc.Domain)] = true
 	}
 
-	for _, bp := range builtinPassthroughDomains {
+	for _, bp := range builtins {
 		if !coveredDomains[bp.Domain] {
 			coveredDomains[bp.Domain] = true
 			exact = append(exact, proxyRoute{Domain: bp.Domain, Injector: injectorNone, AllowedPaths: bp.AllowedPaths})
