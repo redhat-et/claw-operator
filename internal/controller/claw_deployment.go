@@ -590,6 +590,43 @@ func setOrAppendVolume(volumes []any, volume map[string]any) []any {
 	return append(volumes, volume)
 }
 
+// configureInitConfigForUserManaged sets env vars and volume mounts on the
+// init-config container for user-managed mode: management mode flag, agent
+// files source (ConfigMap or Git), and whole-home PVC mount.
+func configureInitConfigForUserManaged(container map[string]any, instance *clawv1alpha1.Claw) error {
+	envVars, _, _ := unstructured.NestedSlice(container, "env")
+	envVars = setOrAppendEnv(envVars, ClawConfigManagementEnvVar, string(clawv1alpha1.ConfigManagementUser))
+	envVars = setOrAppendEnv(envVars, "AGENT_FILES_APPLY_POLICY", agentFilesApplyPolicy(instance))
+	if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.ConfigMapRef != nil {
+		key := agentFilesConfigMapKey(instance.Spec.AgentFiles.ConfigMapRef)
+		envVars = setOrAppendEnv(envVars, "AGENT_FILES_SOURCE", "configmap")
+		envVars = setOrAppendEnv(envVars, "AGENT_FILES_CONFIGMAP_PATH", "/agent-files/"+key)
+		mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+		mounts = setOrAppendVolumeMount(mounts, map[string]any{
+			"name":      "agent-files",
+			"mountPath": "/agent-files",
+			"readOnly":  true,
+		})
+		if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
+			return fmt.Errorf("failed to set init-config agent files mount: %w", err)
+		}
+	}
+	if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.Git != nil {
+		envVars = setOrAppendEnv(envVars, "AGENT_FILES_SOURCE", "git")
+		envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_URL", instance.Spec.AgentFiles.Git.URL)
+		if instance.Spec.AgentFiles.Git.Ref != "" {
+			envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_REF", instance.Spec.AgentFiles.Git.Ref)
+		}
+		if instance.Spec.AgentFiles.Git.Path != "" {
+			envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_PATH", instance.Spec.AgentFiles.Git.Path)
+		}
+	}
+	if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
+		return fmt.Errorf("failed to set init-config env vars: %w", err)
+	}
+	return configureWholeHomeMount(container)
+}
+
 // configureUserManagedOpenClawFiles switches user-managed deployments to mount
 // the full OpenClaw home and wires optional agent file seed sources into
 // init-config. Default operator-managed deployments keep the existing subPath
@@ -620,49 +657,14 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 				continue
 			}
 			name, _, _ := unstructured.NestedString(container, "name")
-			switch name {
-			case ClawInitConfigContainerName:
-				initConfigFound = true
-				envVars, _, _ := unstructured.NestedSlice(container, "env")
-				envVars = setOrAppendEnv(envVars, ClawConfigManagementEnvVar, string(clawv1alpha1.ConfigManagementUser))
-				envVars = setOrAppendEnv(envVars, "AGENT_FILES_APPLY_POLICY", agentFilesApplyPolicy(instance))
-				if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.ConfigMapRef != nil {
-					key := agentFilesConfigMapKey(instance.Spec.AgentFiles.ConfigMapRef)
-					envVars = setOrAppendEnv(envVars, "AGENT_FILES_SOURCE", "configmap")
-					envVars = setOrAppendEnv(envVars, "AGENT_FILES_CONFIGMAP_PATH", "/agent-files/"+key)
-					mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
-					mounts = setOrAppendVolumeMount(mounts, map[string]any{
-						"name":      "agent-files",
-						"mountPath": "/agent-files",
-						"readOnly":  true,
-					})
-					if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
-						return fmt.Errorf("failed to set init-config agent files mount: %w", err)
-					}
-				}
-				if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.Git != nil {
-					envVars = setOrAppendEnv(envVars, "AGENT_FILES_SOURCE", "git")
-					envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_URL", instance.Spec.AgentFiles.Git.URL)
-					if instance.Spec.AgentFiles.Git.Ref != "" {
-						envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_REF", instance.Spec.AgentFiles.Git.Ref)
-					}
-					if instance.Spec.AgentFiles.Git.Path != "" {
-						envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_PATH", instance.Spec.AgentFiles.Git.Path)
-					}
-				}
-				if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
-					return fmt.Errorf("failed to set init-config env vars: %w", err)
-				}
-				if err := configureWholeHomeMount(container); err != nil {
-					return fmt.Errorf("failed to configure init-config home mount: %w", err)
-				}
-				initContainers[i] = container
-			case PluginsInitContainerName:
-				if err := configureWholeHomeMount(container); err != nil {
-					return fmt.Errorf("failed to configure init-plugins home mount: %w", err)
-				}
-				initContainers[i] = container
+			if name != ClawInitConfigContainerName {
+				continue
 			}
+			initConfigFound = true
+			if err := configureInitConfigForUserManaged(container, instance); err != nil {
+				return fmt.Errorf("failed to configure init-config for user-managed mode: %w", err)
+			}
+			initContainers[i] = container
 		}
 		if !initConfigFound {
 			return fmt.Errorf("container %q not found in claw deployment", ClawInitConfigContainerName)
