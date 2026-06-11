@@ -111,6 +111,27 @@ var builtinPassthroughDomains = []builtinPassthrough{
 	{Domain: "registry.npmjs.org"},
 }
 
+// filterBuiltinPassthroughs returns the subset of builtinPassthroughDomains
+// allowed by the given allowlist. When allowlist is nil, all builtins are
+// returned (backward compatible). When non-nil, only domains present in the
+// list are kept; an empty list blocks all builtins.
+func filterBuiltinPassthroughs(allowlist *[]string) []builtinPassthrough {
+	if allowlist == nil {
+		return builtinPassthroughDomains
+	}
+	allowed := make(map[string]bool, len(*allowlist))
+	for _, d := range *allowlist {
+		allowed[d] = true
+	}
+	var filtered []builtinPassthrough
+	for _, bp := range builtinPassthroughDomains {
+		if allowed[bp.Domain] {
+			filtered = append(filtered, bp)
+		}
+	}
+	return filtered
+}
+
 // generateProxyConfig builds the proxy config JSON from resolved credentials.
 // HTTP MCP server URLs are auto-extracted as passthrough routes when not already
 // covered by a credential or builtin domain.
@@ -119,6 +140,7 @@ func generateProxyConfig(
 	credentials []resolvedCredential,
 	mcpServers map[string]clawv1alpha1.McpServerSpec,
 	webSearch *clawv1alpha1.WebSearchSpec,
+	builtinAllowlist *[]string,
 ) ([]byte, error) {
 	var exact []proxyRoute
 
@@ -127,7 +149,7 @@ func generateProxyConfig(
 		coveredDomains[strings.ToLower(rc.Domain)] = true
 	}
 
-	for _, bp := range builtinPassthroughDomains {
+	for _, bp := range filterBuiltinPassthroughs(builtinAllowlist) {
 		if !coveredDomains[bp.Domain] {
 			coveredDomains[bp.Domain] = true
 			exact = append(exact, proxyRoute{Domain: bp.Domain, Injector: injectorNone, AllowedPaths: bp.AllowedPaths})

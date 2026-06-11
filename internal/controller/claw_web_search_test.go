@@ -416,7 +416,7 @@ func TestGenerateProxyConfigWithWebSearch(t *testing.T) {
 			Provider:  "brave",
 			SecretRef: &clawv1alpha1.SecretRefEntry{Name: "s", Key: "k"},
 		}
-		data, err := generateProxyConfig(nil, nil, ws)
+		data, err := generateProxyConfig(nil, nil, ws, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -433,7 +433,7 @@ func TestGenerateProxyConfigWithWebSearch(t *testing.T) {
 			Provider:  "tavily",
 			SecretRef: &clawv1alpha1.SecretRefEntry{Name: "s", Key: "k"},
 		}
-		data, err := generateProxyConfig(nil, nil, ws)
+		data, err := generateProxyConfig(nil, nil, ws, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -446,7 +446,7 @@ func TestGenerateProxyConfigWithWebSearch(t *testing.T) {
 
 	t.Run("duckduckgo adds passthrough route", func(t *testing.T) {
 		ws := &clawv1alpha1.WebSearchSpec{Provider: "duckduckgo"}
-		data, err := generateProxyConfig(nil, nil, ws)
+		data, err := generateProxyConfig(nil, nil, ws, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -459,7 +459,7 @@ func TestGenerateProxyConfigWithWebSearch(t *testing.T) {
 
 	t.Run("gemini adds no new route", func(t *testing.T) {
 		ws := &clawv1alpha1.WebSearchSpec{Provider: "gemini"}
-		data, err := generateProxyConfig(nil, nil, ws)
+		data, err := generateProxyConfig(nil, nil, ws, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -472,7 +472,7 @@ func TestGenerateProxyConfigWithWebSearch(t *testing.T) {
 	})
 
 	t.Run("nil webSearch adds no search route", func(t *testing.T) {
-		data, err := generateProxyConfig(nil, nil, nil)
+		data, err := generateProxyConfig(nil, nil, nil, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -497,7 +497,7 @@ func TestGenerateProxyConfigWithWebSearch(t *testing.T) {
 			Provider:  "brave",
 			SecretRef: &clawv1alpha1.SecretRefEntry{Name: "s", Key: "k"},
 		}
-		data, err := generateProxyConfig(creds, nil, ws)
+		data, err := generateProxyConfig(creds, nil, ws, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -524,7 +524,7 @@ func TestGenerateProxyConfigWithWebSearch(t *testing.T) {
 			Provider:  "brave",
 			SecretRef: &clawv1alpha1.SecretRefEntry{Name: "s", Key: "k"},
 		}
-		data, err := generateProxyConfig(creds, nil, ws)
+		data, err := generateProxyConfig(creds, nil, ws, nil)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
