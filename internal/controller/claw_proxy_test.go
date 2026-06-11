@@ -818,7 +818,8 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 
 	t.Run("should block all builtins when allowlist is empty", func(t *testing.T) {
 		empty := []string{}
-		data, err := generateProxyConfig(nil, nil, nil, &empty)
+		builtins, _ := filterBuiltinPassthroughs(&empty)
+		data, err := generateProxyConfig(nil, nil, nil, builtins)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -828,7 +829,8 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 
 	t.Run("should allow only listed builtins", func(t *testing.T) {
 		allow := []string{"clawhub.ai", "github.com"}
-		data, err := generateProxyConfig(nil, nil, nil, &allow)
+		builtins, _ := filterBuiltinPassthroughs(&allow)
+		data, err := generateProxyConfig(nil, nil, nil, builtins)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -846,6 +848,7 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 
 	t.Run("credential routes still present when builtins are blocked", func(t *testing.T) {
 		empty := []string{}
+		builtins, _ := filterBuiltinPassthroughs(&empty)
 		credentials := []clawv1alpha1.CredentialSpec{
 			{
 				Name:   "anthropic",
@@ -858,7 +861,7 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 				APIKey: &clawv1alpha1.APIKeyConfig{Header: "x-api-key"},
 			},
 		}
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil, &empty)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, builtins)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -869,6 +872,7 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 
 	t.Run("credential shadowing still works with allowlist", func(t *testing.T) {
 		allow := []string{"clawhub.ai", "openrouter.ai"}
+		builtins, _ := filterBuiltinPassthroughs(&allow)
 		credentials := []clawv1alpha1.CredentialSpec{
 			{
 				Name:   "openrouter",
@@ -881,7 +885,7 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 				Provider: "openrouter",
 			},
 		}
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil, &allow)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, builtins)
 		require.NoError(t, err)
 
 		var cfg proxyConfig
@@ -899,6 +903,7 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 
 	t.Run("credential for blocked builtin domain still produces a route", func(t *testing.T) {
 		allow := []string{"clawhub.ai"}
+		builtins, _ := filterBuiltinPassthroughs(&allow)
 		credentials := []clawv1alpha1.CredentialSpec{
 			{
 				Name:   "npm-mirror",
@@ -906,7 +911,7 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 				Domain: "registry.npmjs.org",
 			},
 		}
-		data, err := generateProxyConfig(toResolved(credentials), nil, nil, &allow)
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, builtins)
 		require.NoError(t, err)
 
 		var cfg proxyConfig

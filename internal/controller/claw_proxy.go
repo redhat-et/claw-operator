@@ -120,6 +120,9 @@ func filterBuiltinPassthroughs(allowlist *[]string) (filtered []builtinPassthrou
 	if allowlist == nil {
 		return builtinPassthroughDomains, nil
 	}
+	// Initialize as non-nil empty slice so generateProxyConfig can distinguish
+	// "empty allowlist" (block all) from "no allowlist" (nil = use defaults).
+	filtered = []builtinPassthrough{}
 	allowed := make(map[string]bool, len(*allowlist))
 	for _, d := range *allowlist {
 		allowed[d] = true
@@ -147,8 +150,11 @@ func generateProxyConfig(
 	credentials []resolvedCredential,
 	mcpServers map[string]clawv1alpha1.McpServerSpec,
 	webSearch *clawv1alpha1.WebSearchSpec,
-	builtinAllowlist *[]string,
+	builtins []builtinPassthrough,
 ) ([]byte, error) {
+	if builtins == nil {
+		builtins = builtinPassthroughDomains
+	}
 	var exact []proxyRoute
 
 	coveredDomains := make(map[string]bool)
@@ -156,7 +162,6 @@ func generateProxyConfig(
 		coveredDomains[strings.ToLower(rc.Domain)] = true
 	}
 
-	builtins, _ := filterBuiltinPassthroughs(builtinAllowlist)
 	for _, bp := range builtins {
 		if !coveredDomains[bp.Domain] {
 			coveredDomains[bp.Domain] = true
