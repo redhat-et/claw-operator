@@ -112,24 +112,31 @@ var builtinPassthroughDomains = []builtinPassthrough{
 }
 
 // filterBuiltinPassthroughs returns the subset of builtinPassthroughDomains
-// allowed by the given allowlist. When allowlist is nil, all builtins are
-// returned (backward compatible). When non-nil, only domains present in the
+// allowed by the given allowlist, plus any allowlist entries that don't match
+// a known builtin (for caller-side warning). When allowlist is nil, all builtins
+// are returned (backward compatible). When non-nil, only domains present in the
 // list are kept; an empty list blocks all builtins.
-func filterBuiltinPassthroughs(allowlist *[]string) []builtinPassthrough {
+func filterBuiltinPassthroughs(allowlist *[]string) (filtered []builtinPassthrough, unrecognized []string) {
 	if allowlist == nil {
-		return builtinPassthroughDomains
+		return builtinPassthroughDomains, nil
 	}
 	allowed := make(map[string]bool, len(*allowlist))
 	for _, d := range *allowlist {
 		allowed[d] = true
 	}
-	var filtered []builtinPassthrough
+	knownDomains := make(map[string]bool, len(builtinPassthroughDomains))
 	for _, bp := range builtinPassthroughDomains {
+		knownDomains[bp.Domain] = true
 		if allowed[bp.Domain] {
 			filtered = append(filtered, bp)
 		}
 	}
-	return filtered
+	for _, d := range *allowlist {
+		if !knownDomains[d] {
+			unrecognized = append(unrecognized, d)
+		}
+	}
+	return filtered, unrecognized
 }
 
 // generateProxyConfig builds the proxy config JSON from resolved credentials.
@@ -149,7 +156,8 @@ func generateProxyConfig(
 		coveredDomains[strings.ToLower(rc.Domain)] = true
 	}
 
-	for _, bp := range filterBuiltinPassthroughs(builtinAllowlist) {
+	builtins, _ := filterBuiltinPassthroughs(builtinAllowlist)
+	for _, bp := range builtins {
 		if !coveredDomains[bp.Domain] {
 			coveredDomains[bp.Domain] = true
 			exact = append(exact, proxyRoute{Domain: bp.Domain, Injector: injectorNone, AllowedPaths: bp.AllowedPaths})

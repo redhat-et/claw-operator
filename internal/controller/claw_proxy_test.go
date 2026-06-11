@@ -765,37 +765,44 @@ func TestBuiltinPassthroughDomains(t *testing.T) {
 
 func TestFilterBuiltinPassthroughs(t *testing.T) {
 	t.Run("nil allowlist returns all builtins", func(t *testing.T) {
-		filtered := filterBuiltinPassthroughs(nil)
+		filtered, unrecognized := filterBuiltinPassthroughs(nil)
 		assert.Equal(t, builtinPassthroughDomains, filtered)
+		assert.Empty(t, unrecognized)
 	})
 
 	t.Run("empty allowlist blocks all builtins", func(t *testing.T) {
 		empty := []string{}
-		filtered := filterBuiltinPassthroughs(&empty)
+		filtered, unrecognized := filterBuiltinPassthroughs(&empty)
 		assert.Empty(t, filtered)
+		assert.Empty(t, unrecognized)
 	})
 
 	t.Run("allowlist keeps only listed domains", func(t *testing.T) {
 		allow := []string{"clawhub.ai", "github.com"}
-		filtered := filterBuiltinPassthroughs(&allow)
+		filtered, unrecognized := filterBuiltinPassthroughs(&allow)
 		require.Len(t, filtered, 2)
 		assert.Equal(t, "clawhub.ai", filtered[0].Domain)
 		assert.Equal(t, "github.com", filtered[1].Domain)
+		assert.Empty(t, unrecognized)
 	})
 
 	t.Run("preserves path restrictions on allowed domains", func(t *testing.T) {
 		allow := []string{"raw.githubusercontent.com"}
-		filtered := filterBuiltinPassthroughs(&allow)
+		filtered, unrecognized := filterBuiltinPassthroughs(&allow)
 		require.Len(t, filtered, 1)
 		assert.Equal(t, "raw.githubusercontent.com", filtered[0].Domain)
 		assert.Equal(t, []string{"/BerriAI/litellm/", "/WhiskeySockets/Baileys/"}, filtered[0].AllowedPaths)
+		assert.Empty(t, unrecognized)
 	})
 
-	t.Run("unknown domains in allowlist are ignored", func(t *testing.T) {
-		allow := []string{"clawhub.ai", "unknown.example.com"}
-		filtered := filterBuiltinPassthroughs(&allow)
+	t.Run("returns unrecognized domains", func(t *testing.T) {
+		allow := []string{"clawhub.ai", "unknown.example.com", "typo.ai"}
+		filtered, unrecognized := filterBuiltinPassthroughs(&allow)
 		require.Len(t, filtered, 1)
 		assert.Equal(t, "clawhub.ai", filtered[0].Domain)
+		require.Len(t, unrecognized, 2)
+		assert.Equal(t, "unknown.example.com", unrecognized[0])
+		assert.Equal(t, "typo.ai", unrecognized[1])
 	})
 }
 
@@ -888,6 +895,28 @@ func TestBuiltinPassthroughAllowlist(t *testing.T) {
 
 		route := findRouteByDomain(t, cfg.Routes, "openrouter.ai")
 		assert.Equal(t, "bearer", route.Injector, "credential should take precedence over builtin")
+	})
+
+	t.Run("credential for blocked builtin domain still produces a route", func(t *testing.T) {
+		allow := []string{"clawhub.ai"}
+		credentials := []clawv1alpha1.CredentialSpec{
+			{
+				Name:   "npm-mirror",
+				Type:   clawv1alpha1.CredentialTypeNone,
+				Domain: "registry.npmjs.org",
+			},
+		}
+		data, err := generateProxyConfig(toResolved(credentials), nil, nil, &allow)
+		require.NoError(t, err)
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal(data, &cfg))
+		require.Len(t, cfg.Routes, 2, "credential route + one allowed builtin")
+
+		route := findRouteByDomain(t, cfg.Routes, "registry.npmjs.org")
+		assert.Equal(t, "none", route.Injector, "credential route should be present even though builtin is blocked")
+		route = findRouteByDomain(t, cfg.Routes, "clawhub.ai")
+		assert.Equal(t, "none", route.Injector, "allowed builtin should still be present")
 	})
 }
 
@@ -1021,6 +1050,63 @@ func TestOpenClawProxyConfigMap(t *testing.T) {
 		route := findRouteByDomain(t, cfg.Routes, ".googleapis.com")
 		assert.Equal(t, "/gemini", route.PathPrefix, "should have gateway path prefix")
 		assert.Equal(t, "https://generativelanguage.googleapis.com", route.Upstream, "should have gateway upstream")
+	})
+}
+
+// --- Builtin passthrough integration tests (envtest) ---
+
+func TestBuiltinPassthroughAllowlistIntegration(t *testing.T) {
+	t.Run("should restrict proxy config to allowed builtins after reconciliation", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		allow := []string{"clawhub.ai", "github.com"}
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Namespace = namespace
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{
+				Name:     "gemini",
+				Type:     clawv1alpha1.CredentialTypeAPIKey,
+				Provider: "google",
+				SecretRef: []clawv1alpha1.SecretRefEntry{
+					{Name: aiModelSecret, Key: aiModelSecretKey},
+				},
+				Domain: ".googleapis.com",
+				APIKey: &clawv1alpha1.APIKeyConfig{Header: "x-goog-api-key"},
+			},
+		}
+		instance.Spec.Network = &clawv1alpha1.NetworkSpec{
+			BuiltinPassthroughs: &allow,
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		cm := &corev1.ConfigMap{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getProxyConfigMapName(testInstanceName),
+				Namespace: namespace,
+			}, cm) == nil
+		}, "proxy config ConfigMap should be created")
+
+		var cfg proxyConfig
+		require.NoError(t, json.Unmarshal([]byte(cm.Data["proxy-config.json"]), &cfg))
+
+		domains := make(map[string]bool)
+		for _, r := range cfg.Routes {
+			domains[r.Domain] = true
+		}
+
+		assert.True(t, domains["clawhub.ai"], "allowed builtin should be present")
+		assert.True(t, domains["github.com"], "allowed builtin should be present")
+		assert.True(t, domains[".googleapis.com"], "credential route should be present")
+		assert.False(t, domains["openrouter.ai"], "blocked builtin should be absent")
+		assert.False(t, domains["registry.npmjs.org"], "blocked builtin should be absent")
 	})
 }
 

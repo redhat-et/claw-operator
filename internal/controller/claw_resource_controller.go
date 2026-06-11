@@ -874,6 +874,11 @@ func (r *ClawResourceReconciler) applyProxyResources(ctx context.Context, instan
 	if instance.Spec.Network != nil {
 		builtinAllowlist = instance.Spec.Network.BuiltinPassthroughs
 	}
+	if builtinAllowlist != nil {
+		if _, unrecognized := filterBuiltinPassthroughs(builtinAllowlist); len(unrecognized) > 0 {
+			logger.Info("builtinPassthroughs contains unrecognized domains (possible typo)", "unrecognized", unrecognized)
+		}
+	}
 	proxyConfigJSON, err := generateProxyConfig(resolvedCreds, instance.Spec.McpServers, instance.Spec.WebSearch, builtinAllowlist)
 	if err != nil {
 		logger.Error(err, "Failed to generate proxy config")
