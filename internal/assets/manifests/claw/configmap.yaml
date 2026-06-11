@@ -68,6 +68,41 @@ data:
       return result;
     }
 
+    // Merge two agents.list arrays by agent id so operator-supplied config
+    // (e.g. the deployer's default agent) composes with bundle-supplied agents
+    // (sub-agents) instead of replacing the whole list. Source fields win on a
+    // matching id; bundle-only agents are preserved; source-only agents append.
+    function mergeAgentsById(targetList, sourceList) {
+      const result = targetList.map((a) => (a && typeof a === "object" ? { ...a } : a));
+      const indexById = new Map();
+      result.forEach((a, i) => {
+        if (a && typeof a === "object" && typeof a.id === "string") indexById.set(a.id, i);
+      });
+      for (const agent of sourceList) {
+        if (!agent || typeof agent !== "object") continue;
+        const id = typeof agent.id === "string" ? agent.id : undefined;
+        if (id !== undefined && indexById.has(id)) {
+          const i = indexById.get(id);
+          result[i] = deepMerge(result[i], agent);
+        } else {
+          result.push(agent);
+        }
+      }
+      return result;
+    }
+
+    // deepMerge, but agents.list is merged by id rather than replaced.
+    function mergeConfigs(target, source) {
+      const merged = deepMerge(target, source);
+      const targetAgents = target && target.agents && target.agents.list;
+      const sourceAgents = source && source.agents && source.agents.list;
+      if (Array.isArray(targetAgents) && Array.isArray(sourceAgents)) {
+        merged.agents = merged.agents || {};
+        merged.agents.list = mergeAgentsById(targetAgents, sourceAgents);
+      }
+      return merged;
+    }
+
     function seedIfMissing(src, dest) {
       if (!fs.existsSync(dest)) {
         const dir = path.dirname(dest);
@@ -217,7 +252,7 @@ data:
       }
       const savedPrimary = base?.agents?.defaults?.model?.primary;
       const savedFallbacks = base?.agents?.defaults?.model?.fallbacks;
-      const merged = deepMerge(base, ops);
+      const merged = mergeConfigs(base, ops);
       if (savedPrimary || savedFallbacks) {
         merged.agents = merged.agents || {};
         merged.agents.defaults = merged.agents.defaults || {};
@@ -232,7 +267,7 @@ data:
       fs.writeFileSync(pvcPath, JSON.stringify(merged, null, 2), { mode: 0o600 });
       console.log("[init-config] merged operator.json into existing openclaw.json");
     } else {
-      fs.writeFileSync(pvcPath, JSON.stringify(deepMerge(seedConfig, ops), null, 2), { mode: 0o600 });
+      fs.writeFileSync(pvcPath, JSON.stringify(mergeConfigs(seedConfig, ops), null, 2), { mode: 0o600 });
       console.log(`[init-config] wrote openclaw.json (mode=${mode}, first_run=${!fs.existsSync(pvcPath)})`);
     }
 

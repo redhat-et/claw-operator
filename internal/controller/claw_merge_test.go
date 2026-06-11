@@ -195,6 +195,48 @@ func TestMergeJS(t *testing.T) {
 		assert.Contains(t, result.stdout, "[init-config]")
 	})
 
+	t.Run("first run merges bundle sub-agents with operator default agent", func(t *testing.T) {
+		// Bundle openclaw.json (agentFiles seed): main agent + docs-checker sub-agent + MCP.
+		seedJSON := `{
+			"mcp": { "servers": { "context7": { "url": "https://mcp.context7.com/mcp", "transport": "streamable-http" } } },
+			"agents": {
+				"list": [
+					{ "id": "default", "default": true, "name": "Software Q&A", "workspace": "~/.openclaw/workspace", "subagents": { "allowAgents": ["docs-checker"] } },
+					{ "id": "docs-checker", "name": "Docs Checker", "workspace": "~/.openclaw/workspace-docs-checker", "model": { "primary": "anthropic/claude-sonnet-4-6" } }
+				]
+			}
+		}`
+		// operator.json carries the deployer-written single default agent
+		// (spec.config.raw is merged into operator.json by the controller).
+		operatorJSON := `{
+			"gateway": { "mode": "local", "bind": "lan", "port": 18789, "auth": { "mode": "token" } },
+			"agents": { "defaults": {}, "list": [ { "id": "default", "name": "Doc", "identity": { "name": "Doc" }, "workspace": "~/.openclaw/workspace" } ] }
+		}`
+
+		result := runMergeJS(t, mergeTestSetup{seedJSON: seedJSON, operatorJSON: operatorJSON})
+
+		agentsList, ok := nestedValue(result.config, "agents.list")
+		require.True(t, ok, "result should have agents.list")
+		list, ok := agentsList.([]any)
+		require.True(t, ok)
+
+		byID := map[string]map[string]any{}
+		for _, a := range list {
+			if m, ok := a.(map[string]any); ok {
+				if id, _ := m["id"].(string); id != "" {
+					byID[id] = m
+				}
+			}
+		}
+		require.Contains(t, byID, "default", "deployer default agent should remain")
+		require.Contains(t, byID, "docs-checker", "bundle sub-agent must be preserved, not clobbered")
+		assert.Equal(t, "Doc", byID["default"]["name"], "operator/deployer name should win on the default agent")
+		_, hasAllow := nestedValue(byID["default"], "subagents.allowAgents")
+		assert.True(t, hasAllow, "bundle subagents.allowAgents should be preserved on the default agent")
+		_, hasMcp := nestedValue(result.config, "mcp.servers.context7")
+		assert.True(t, hasMcp, "bundle MCP server should be preserved")
+	})
+
 	t.Run("restart with existing PVC", func(t *testing.T) {
 		pvcJSON := `{
 			"agents": {
