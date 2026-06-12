@@ -199,10 +199,12 @@ data:
         let cloneUrl = url;
         const cloneOpts = { stdio: "inherit" };
         const askpassPath = "/tmp/git-askpass";
+        const credsPath = "/tmp/git-pass";
         if (secretDir) {
           const user = fs.readFileSync(path.join(secretDir, "username"), "utf8").trim();
           const pass = fs.readFileSync(path.join(secretDir, "password"), "utf8").trim();
-          fs.writeFileSync(askpassPath, "#!/bin/sh\nprintf '%s\\n' " + JSON.stringify(pass), { mode: 0o700 });
+          fs.writeFileSync(credsPath, pass, { mode: 0o600 });
+          fs.writeFileSync(askpassPath, "#!/bin/sh\ncat " + credsPath + "\n", { mode: 0o700 });
           cloneUrl = url.replace("https://", "https://" + encodeURIComponent(user) + "@");
           cloneOpts.env = { ...process.env, GIT_ASKPASS: askpassPath };
         }
@@ -213,6 +215,7 @@ data:
         try {
           childProcess.execFileSync("git", args, cloneOpts);
         } finally {
+          try { fs.rmSync(credsPath, { force: true }); } catch (_) {}
           try { fs.rmSync(askpassPath, { force: true }); } catch (_) {}
         }
         const dest = subPath ? path.join(cloneDir, subPath) : cloneDir;

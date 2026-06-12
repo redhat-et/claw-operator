@@ -1941,24 +1941,23 @@ reachable, the operator will not install plugins when
 
 ### Updating persona files
 
-When you update the ConfigMap, the operator detects the change
-and triggers a pod rollout (via a config hash annotation on the
-pod template). The new persona files take effect when the pod
-restarts:
+To update persona files, edit the ConfigMap and trigger a
+reconcile:
 
 ```sh
 oc create configmap finance-guardrails \
   --from-file=AGENTS.md=./guardrails/AGENTS-v2.md \
   --from-file=SOUL.md=./guardrails/SOUL-v2.md \
   -n $NS --dry-run=client -o yaml | oc apply -f -
+
+# Trigger reconcile (the operator does not auto-detect
+# persona ConfigMap changes — see known limitation below)
+oc annotate claw instance -n $NS reconcile=$(date +%s) --overwrite
 ```
 
-After the ConfigMap update, the operator reconciles and the
-deployment rolls out with the new persona.
-
-> **Note:** The pod rollout happens on the next reconcile loop.
-> To trigger an immediate reconcile, edit any field on the Claw
-> CR (e.g., add a label) or wait for the periodic resync.
+On the next reconcile, the operator computes a new persona
+config hash, stamps it on the pod template, and Kubernetes
+rolls out the deployment with the updated persona files.
 
 ### Interaction with `agentFiles`
 

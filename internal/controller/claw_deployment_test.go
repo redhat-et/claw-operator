@@ -2396,6 +2396,10 @@ func TestStampGitSecretVersion(t *testing.T) {
 			},
 		}
 		require.NoError(t, k8sClient.Create(ctx, secret))
+		// Re-read to get the server-assigned ResourceVersion
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{
+			Namespace: namespace, Name: "stamp-test-creds",
+		}, secret))
 
 		reconciler := createClawReconciler()
 		objects := makeGatewayDeployment()
@@ -2417,8 +2421,6 @@ func TestStampGitSecretVersion(t *testing.T) {
 		)
 		annotationKey := clawv1alpha1.AnnotationPrefixSecretVersion +
 			gitCredentialsVolumeName + clawv1alpha1.AnnotationSuffixSecretVersion
-		rv, ok := annotations[annotationKey]
-		assert.True(t, ok, "git-credentials secret version annotation should be set")
-		assert.NotEmpty(t, rv, "ResourceVersion should not be empty")
+		assert.Equal(t, secret.ResourceVersion, annotations[annotationKey])
 	})
 }

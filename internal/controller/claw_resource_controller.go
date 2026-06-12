@@ -1636,5 +1636,11 @@ func clawReferencesSecret(instance clawv1alpha1.Claw, secretName string) bool {
 			return true
 		}
 	}
+	if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.Git != nil &&
+		instance.Spec.AgentFiles.Git.SecretRef != nil {
+		if instance.Spec.AgentFiles.Git.SecretRef.Name == secretName {
+			return true
+		}
+	}
 	return false
 }

@@ -67,8 +67,11 @@ type AgentFilesGitSource struct {
 ```
 
 When `secretRef` is set, the operator mounts the Secret into the
-init-config container and sets `GIT_ASKPASS` or injects
-credentials into the clone URL. The Secret format follows git
+init-config container. merge.js embeds only the `username` into
+the clone URL (so Git knows which user to authenticate as) and
+writes the `password` to a temporary credential file read by a
+`GIT_ASKPASS` helper script. The password never appears in the
+URL, process args, or logs. The Secret format follows Git
 conventions: `username` + `password` keys for HTTPS.
 
 ### Git clone routing through the proxy
