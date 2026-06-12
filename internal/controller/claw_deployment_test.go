@@ -963,6 +963,85 @@ func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
 		assert.Equal(t, "demos/software-qa-mcp", envMap["AGENT_FILES_GIT_PATH"])
 		assert.Equal(t, "Always", envMap["AGENT_FILES_APPLY_POLICY"])
 	})
+
+	t.Run("wires git secretRef volume and env", func(t *testing.T) {
+		objects := makeDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git: &clawv1alpha1.AgentFilesGitSource{
+				URL: "https://github.com/corp/configs.git",
+				SecretRef: &clawv1alpha1.GitSecretRef{
+					Name: "corp-git-creds",
+				},
+			},
+		}
+
+		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+
+		// Verify env var on init-config
+		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
+		initConfig := initContainers[0].(map[string]any)
+		envVars := initConfig["env"].([]any)
+		envMap := map[string]string{}
+		for _, e := range envVars {
+			env := e.(map[string]any)
+			if v, ok := env["value"].(string); ok {
+				envMap[env["name"].(string)] = v
+			}
+		}
+		assert.Equal(t, "/etc/git-credentials", envMap["AGENT_FILES_GIT_SECRET_DIR"])
+
+		// Verify volumeMount on init-config
+		mounts := initConfig["volumeMounts"].([]any)
+		var gitMount map[string]any
+		for _, m := range mounts {
+			mount := m.(map[string]any)
+			if mount["name"] == gitCredentialsVolumeName {
+				gitMount = mount
+				break
+			}
+		}
+		require.NotNil(t, gitMount, "git-credentials mount should exist on init-config")
+		assert.Equal(t, "/etc/git-credentials", gitMount["mountPath"])
+		assert.Equal(t, true, gitMount["readOnly"])
+
+		// Verify volume on deployment
+		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
+		var gitVol map[string]any
+		for _, v := range volumes {
+			vol := v.(map[string]any)
+			if vol["name"] == gitCredentialsVolumeName {
+				gitVol = vol
+				break
+			}
+		}
+		require.NotNil(t, gitVol, "git-credentials volume should exist")
+		secretSource := gitVol["secret"].(map[string]any)
+		assert.Equal(t, "corp-git-creds", secretSource["secretName"])
+	})
+
+	t.Run("no git-credentials volume when secretRef is nil", func(t *testing.T) {
+		objects := makeDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git: &clawv1alpha1.AgentFilesGitSource{
+				URL: "https://github.com/example/public.git",
+			},
+		}
+
+		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+
+		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
+		for _, v := range volumes {
+			vol := v.(map[string]any)
+			assert.NotEqual(t, gitCredentialsVolumeName, vol["name"],
+				"git-credentials volume should not exist when secretRef is nil")
+		}
+	})
 }
 
 // --- Kubernetes deployment configuration tests ---
@@ -2161,5 +2240,187 @@ func TestEnableServiceLinks(t *testing.T) {
 			assert.False(t, *deployment.Spec.Template.Spec.EnableServiceLinks,
 				"%s should have enableServiceLinks=false", name)
 		}
+	})
+}
+
+// --- Git secret validation and version stamping tests ---
+
+func TestValidateGitSecretRef(t *testing.T) {
+	t.Run("no-op when agentFiles is nil", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		reconciler := createClawReconciler()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+		}
+		require.NoError(t, reconciler.validateGitSecretRef(ctx, instance))
+	})
+
+	t.Run("no-op when secretRef is nil", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		reconciler := createClawReconciler()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				AgentFiles: &clawv1alpha1.AgentFilesSpec{
+					Git: &clawv1alpha1.AgentFilesGitSource{
+						URL: "https://github.com/example/repo.git",
+					},
+				},
+			},
+		}
+		require.NoError(t, reconciler.validateGitSecretRef(ctx, instance))
+	})
+
+	t.Run("error when Secret does not exist", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		reconciler := createClawReconciler()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				AgentFiles: &clawv1alpha1.AgentFilesSpec{
+					Git: &clawv1alpha1.AgentFilesGitSource{
+						URL:       "https://github.com/corp/repo.git",
+						SecretRef: &clawv1alpha1.GitSecretRef{Name: "nonexistent"},
+					},
+				},
+			},
+		}
+		err := reconciler.validateGitSecretRef(ctx, instance)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "nonexistent")
+	})
+
+	t.Run("error when Secret is missing username key", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "bad-git-creds", Namespace: namespace},
+			Data:       map[string][]byte{"password": []byte("token123")},
+		}
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		reconciler := createClawReconciler()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				AgentFiles: &clawv1alpha1.AgentFilesSpec{
+					Git: &clawv1alpha1.AgentFilesGitSource{
+						URL:       "https://github.com/corp/repo.git",
+						SecretRef: &clawv1alpha1.GitSecretRef{Name: "bad-git-creds"},
+					},
+				},
+			},
+		}
+		err := reconciler.validateGitSecretRef(ctx, instance)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "username")
+	})
+
+	t.Run("error when Secret is missing password key", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "bad-git-creds-2", Namespace: namespace},
+			Data:       map[string][]byte{"username": []byte("bot")},
+		}
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		reconciler := createClawReconciler()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				AgentFiles: &clawv1alpha1.AgentFilesSpec{
+					Git: &clawv1alpha1.AgentFilesGitSource{
+						URL:       "https://github.com/corp/repo.git",
+						SecretRef: &clawv1alpha1.GitSecretRef{Name: "bad-git-creds-2"},
+					},
+				},
+			},
+		}
+		err := reconciler.validateGitSecretRef(ctx, instance)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "password")
+	})
+
+	t.Run("succeeds with valid Secret", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "good-git-creds", Namespace: namespace},
+			Data: map[string][]byte{
+				"username": []byte("deploy-bot"),
+				"password": []byte("ghp_token123"),
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		reconciler := createClawReconciler()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				AgentFiles: &clawv1alpha1.AgentFilesSpec{
+					Git: &clawv1alpha1.AgentFilesGitSource{
+						URL:       "https://github.com/corp/repo.git",
+						SecretRef: &clawv1alpha1.GitSecretRef{Name: "good-git-creds"},
+					},
+				},
+			},
+		}
+		require.NoError(t, reconciler.validateGitSecretRef(ctx, instance))
+	})
+}
+
+func TestStampGitSecretVersion(t *testing.T) {
+	t.Run("no-op when secretRef is nil", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		reconciler := createClawReconciler()
+		objects := makeGatewayDeployment()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+		}
+		require.NoError(t, reconciler.stampGitSecretVersion(ctx, objects, instance))
+
+		annotations, _, _ := unstructured.NestedStringMap(
+			objects[0].Object, "spec", "template", "metadata", "annotations",
+		)
+		for k := range annotations {
+			assert.NotContains(t, k, gitCredentialsVolumeName,
+				"no git-credentials annotation should be set")
+		}
+	})
+
+	t.Run("stamps ResourceVersion on gateway deployment", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "stamp-test-creds", Namespace: namespace},
+			Data: map[string][]byte{
+				"username": []byte("bot"),
+				"password": []byte("token"),
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, secret))
+		// Re-read to get the server-assigned ResourceVersion
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{
+			Namespace: namespace, Name: "stamp-test-creds",
+		}, secret))
+
+		reconciler := createClawReconciler()
+		objects := makeGatewayDeployment()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				AgentFiles: &clawv1alpha1.AgentFilesSpec{
+					Git: &clawv1alpha1.AgentFilesGitSource{
+						URL:       "https://github.com/corp/repo.git",
+						SecretRef: &clawv1alpha1.GitSecretRef{Name: "stamp-test-creds"},
+					},
+				},
+			},
+		}
+		require.NoError(t, reconciler.stampGitSecretVersion(ctx, objects, instance))
+
+		annotations, _, _ := unstructured.NestedStringMap(
+			objects[0].Object, "spec", "template", "metadata", "annotations",
+		)
+		annotationKey := clawv1alpha1.AnnotationPrefixSecretVersion +
+			gitCredentialsVolumeName + clawv1alpha1.AnnotationSuffixSecretVersion
+		assert.Equal(t, secret.ResourceVersion, annotations[annotationKey])
 	})
 }

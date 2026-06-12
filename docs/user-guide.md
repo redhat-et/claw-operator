@@ -1430,6 +1430,35 @@ spec:
       path: teams/platform
 ```
 
+**Private Git repo with credentials:**
+
+```sh
+oc create secret generic corp-git-creds \
+  --from-literal=username=deploy-bot \
+  --from-literal=password=ghp_YOUR_PAT_HERE \
+  -n $NS
+```
+
+```yaml
+spec:
+  config:
+    management: user
+  agentFiles:
+    git:
+      url: https://github.com/corp/claw-configs.git
+      ref: main
+      path: teams/platform
+      secretRef:
+        name: corp-git-creds
+```
+
+The Secret must have `username` and `password` keys. For
+GitHub, use the account username and a Personal Access Token.
+For GitLab, use a deploy token. The credentials are mounted
+read-only in the init container and cleaned up after the
+clone completes. Credential rotation (updating the Secret)
+triggers a pod rollout automatically.
+
 By default, seeded agent files use `applyPolicy: IfMissing`, so runtime edits on the PVC survive restarts. Set `applyPolicy: Always` only when the source should overwrite matching files on every pod start:
 
 ```yaml
@@ -1912,24 +1941,84 @@ reachable, the operator will not install plugins when
 
 ### Updating persona files
 
-When you update the ConfigMap, the operator detects the change
-and triggers a pod rollout (via a config hash annotation on the
-pod template). The new persona files take effect when the pod
-restarts:
+To update persona files, edit the ConfigMap and trigger a
+reconcile:
 
 ```sh
 oc create configmap finance-guardrails \
   --from-file=AGENTS.md=./guardrails/AGENTS-v2.md \
   --from-file=SOUL.md=./guardrails/SOUL-v2.md \
   -n $NS --dry-run=client -o yaml | oc apply -f -
+
+# Trigger reconcile (the operator does not auto-detect
+# persona ConfigMap changes — see known limitation below)
+oc annotate claw instance -n $NS reconcile=$(date +%s) --overwrite
 ```
 
-After the ConfigMap update, the operator reconciles and the
-deployment rolls out with the new persona.
+On the next reconcile, the operator computes a new persona
+config hash, stamps it on the pod template, and Kubernetes
+rolls out the deployment with the updated persona files.
 
-> **Note:** The pod rollout happens on the next reconcile loop.
-> To trigger an immediate reconcile, edit any field on the Claw
-> CR (e.g., add a label) or wait for the periodic resync.
+### Interaction with `agentFiles`
+
+`personaRef` and `agentFiles` work at different layers and
+compose naturally:
+
+- **`agentFiles`** seeds files onto the writable PVC during
+  init. These are user-owned — editable at runtime (unless
+  `applyPolicy: Always` re-seeds on restart).
+- **`personaRef`** mounts ConfigMap keys as read-only overlays
+  on top of the PVC. The overlay physically masks the PVC file
+  at that path.
+
+When both are set and have overlapping filenames (e.g., both
+provide `AGENTS.md`), the persona guard wins — the agent sees
+the ConfigMap version, which is read-only. The agentFiles
+version still exists on the PVC underneath but is invisible.
+
+This enables a useful pattern: seed a department profile from
+a private Git repo (via `agentFiles.git` with `secretRef`),
+then selectively lock down specific files with `personaRef`:
+
+```yaml
+spec:
+  config:
+    management: user
+  agentFiles:
+    git:
+      url: https://github.com/corp/configs.git
+      ref: main
+      path: hr-team
+      secretRef:
+        name: corp-git-creds
+  restrictions:
+    personaRef:
+      name: hr-guardrails   # overrides SOUL.md only
+```
+
+In this example, the HR team gets their full profile from the
+private repo (AGENTS.md, skills, config), but SOUL.md is
+locked down by the admin via the persona guard. The team can
+edit AGENTS.md freely; SOUL.md is immutable.
+
+> **Note:** `personaRef` is not controlled by `mergeMode`.
+> `mergeMode` governs `openclaw.json` (application config).
+> `personaRef` is a filesystem-level overlay independent of
+> the config merge pipeline.
+
+### Known limitation: persona ConfigMap change detection
+
+Edits to the persona ConfigMap are not automatically detected
+by the operator. The operator's ConfigMap cache is scoped to
+operator-managed ConfigMaps, so user-created ConfigMaps are
+invisible to the watch. After updating a persona ConfigMap,
+trigger a reconcile by editing the Claw CR:
+
+```sh
+oc annotate claw instance -n $NS reconcile=$(date +%s) --overwrite
+```
+
+This will be fixed in a future release.
 
 ### `restrictions` field reference
 

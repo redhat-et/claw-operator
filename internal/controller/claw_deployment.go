@@ -35,6 +35,8 @@ import (
 	clawv1alpha1 "github.com/codeready-toolchain/claw-operator/api/v1alpha1"
 )
 
+const gitCredentialsVolumeName = "git-credentials"
+
 // configureClawImage overrides the OpenClaw container image tag on the gateway
 // Deployment when spec.version is set. Affects init-volume, init-config (init
 // containers) and gateway (regular container).
@@ -620,6 +622,18 @@ func configureInitConfigForUserManaged(container map[string]any, instance *clawv
 		if instance.Spec.AgentFiles.Git.Path != "" {
 			envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_PATH", instance.Spec.AgentFiles.Git.Path)
 		}
+		if instance.Spec.AgentFiles.Git.SecretRef != nil {
+			envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_SECRET_DIR", "/etc/git-credentials")
+			mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+			mounts = setOrAppendVolumeMount(mounts, map[string]any{
+				"name":      gitCredentialsVolumeName,
+				"mountPath": "/etc/git-credentials",
+				"readOnly":  true,
+			})
+			if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
+				return fmt.Errorf("failed to set init-config git credentials mount: %w", err)
+			}
+		}
 	}
 	if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
 		return fmt.Errorf("failed to set init-config env vars: %w", err)
@@ -703,17 +717,26 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
 		}
 
+		volumes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "volumes")
 		if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.ConfigMapRef != nil {
-			volumes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "volumes")
 			volumes = setOrAppendVolume(volumes, map[string]any{
 				"name": "agent-files",
 				"configMap": map[string]any{
 					"name": instance.Spec.AgentFiles.ConfigMapRef.Name,
 				},
 			})
-			if err := unstructured.SetNestedSlice(obj.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
-				return fmt.Errorf("failed to set volumes on claw deployment: %w", err)
-			}
+		}
+		if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.Git != nil &&
+			instance.Spec.AgentFiles.Git.SecretRef != nil {
+			volumes = setOrAppendVolume(volumes, map[string]any{
+				"name": "git-credentials",
+				"secret": map[string]any{
+					"secretName": instance.Spec.AgentFiles.Git.SecretRef.Name,
+				},
+			})
+		}
+		if err := unstructured.SetNestedSlice(obj.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
+			return fmt.Errorf("failed to set volumes on claw deployment: %w", err)
 		}
 		return nil
 	}
@@ -1061,4 +1084,76 @@ func inClusterBypassEnabled(instance *clawv1alpha1.Claw) bool {
 	return instance.Spec.Network != nil &&
 		instance.Spec.Network.InClusterBypass != nil &&
 		*instance.Spec.Network.InClusterBypass
+}
+
+// stampGitSecretVersion stamps the git credential Secret's ResourceVersion
+// as an annotation on the gateway pod template. This triggers a rollout
+// when the Secret is updated (e.g., credential rotation).
+func (r *ClawResourceReconciler) stampGitSecretVersion(
+	ctx context.Context,
+	objects []*unstructured.Unstructured,
+	instance *clawv1alpha1.Claw,
+) error {
+	if instance.Spec.AgentFiles == nil ||
+		instance.Spec.AgentFiles.Git == nil ||
+		instance.Spec.AgentFiles.Git.SecretRef == nil {
+		return nil
+	}
+
+	secretName := instance.Spec.AgentFiles.Git.SecretRef.Name
+	secret := &corev1.Secret{}
+	if err := r.UserSecretReader.Get(ctx, client.ObjectKey{
+		Namespace: instance.Namespace,
+		Name:      secretName,
+	}, secret); err != nil {
+		return fmt.Errorf("failed to get git credential Secret %q: %w", secretName, err)
+	}
+
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+		annotations, _, _ := unstructured.NestedStringMap(
+			obj.Object, "spec", "template", "metadata", "annotations",
+		)
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		annotations[clawv1alpha1.AnnotationPrefixSecretVersion+gitCredentialsVolumeName+
+			clawv1alpha1.AnnotationSuffixSecretVersion] = secret.ResourceVersion
+		return unstructured.SetNestedStringMap(
+			obj.Object, annotations, "spec", "template", "metadata", "annotations",
+		)
+	}
+	return fmt.Errorf("gateway deployment %s not found for git secret version stamping", gatewayName)
+}
+
+// validateGitSecretRef checks that the Secret referenced by
+// agentFiles.git.secretRef exists and contains the required keys.
+func (r *ClawResourceReconciler) validateGitSecretRef(
+	ctx context.Context,
+	instance *clawv1alpha1.Claw,
+) error {
+	if instance.Spec.AgentFiles == nil ||
+		instance.Spec.AgentFiles.Git == nil ||
+		instance.Spec.AgentFiles.Git.SecretRef == nil {
+		return nil
+	}
+
+	secretName := instance.Spec.AgentFiles.Git.SecretRef.Name
+	secret := &corev1.Secret{}
+	if err := r.UserSecretReader.Get(ctx, client.ObjectKey{
+		Namespace: instance.Namespace,
+		Name:      secretName,
+	}, secret); err != nil {
+		return fmt.Errorf("git credential Secret %q not found: %w", secretName, err)
+	}
+
+	for _, key := range []string{"username", "password"} {
+		if _, ok := secret.Data[key]; !ok {
+			return fmt.Errorf("git credential Secret %q missing required key %q", secretName, key)
+		}
+	}
+	return nil
 }

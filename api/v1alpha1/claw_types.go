@@ -463,6 +463,21 @@ type AgentFilesGitSource struct {
 	// Defaults to the repository root.
 	// +optional
 	Path string `json:"path,omitempty"`
+
+	// SecretRef references a Secret containing Git credentials for private
+	// repositories. The Secret must have "username" and "password" keys.
+	// For GitHub, use a Personal Access Token as the password.
+	// For GitLab, use a deploy token or project access token.
+	// +optional
+	SecretRef *GitSecretRef `json:"secretRef,omitempty"`
+}
+
+// GitSecretRef references a Secret containing Git credentials.
+type GitSecretRef struct {
+	// Name is the Secret name in the Claw namespace.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // RestrictionsSpec configures runtime restrictions that limit what the agent

@@ -192,12 +192,32 @@ data:
         if (!url) throw new Error("AGENT_FILES_GIT_URL is required when AGENT_FILES_SOURCE=git");
         const ref = process.env.AGENT_FILES_GIT_REF || "";
         const subPath = process.env.AGENT_FILES_GIT_PATH || "";
+        const secretDir = process.env.AGENT_FILES_GIT_SECRET_DIR || "";
         const cloneDir = path.join(operatorDir, "agent-files-git");
         fs.rmSync(cloneDir, { recursive: true, force: true });
+
+        let cloneUrl = url;
+        const cloneOpts = { stdio: "inherit" };
+        const askpassPath = "/tmp/git-askpass";
+        const credsPath = "/tmp/git-pass";
+        if (secretDir) {
+          const user = fs.readFileSync(path.join(secretDir, "username"), "utf8").trim();
+          const pass = fs.readFileSync(path.join(secretDir, "password"), "utf8").trim();
+          fs.writeFileSync(credsPath, pass, { mode: 0o600 });
+          fs.writeFileSync(askpassPath, "#!/bin/sh\ncat " + credsPath + "\n", { mode: 0o700 });
+          cloneUrl = url.replace("https://", "https://" + encodeURIComponent(user) + "@");
+          cloneOpts.env = { ...process.env, GIT_ASKPASS: askpassPath };
+        }
+
         const args = ["clone", "--depth", "1"];
         if (ref) args.push("--branch", ref);
-        args.push(url, cloneDir);
-        childProcess.execFileSync("git", args, { stdio: "inherit" });
+        args.push(cloneUrl, cloneDir);
+        try {
+          childProcess.execFileSync("git", args, cloneOpts);
+        } finally {
+          try { fs.rmSync(credsPath, { force: true }); } catch (_) {}
+          try { fs.rmSync(askpassPath, { force: true }); } catch (_) {}
+        }
         const dest = subPath ? path.join(cloneDir, subPath) : cloneDir;
         if (!fs.existsSync(dest)) {
           throw new Error(`agent files git path not found: ${subPath}`);

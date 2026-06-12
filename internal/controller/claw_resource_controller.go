@@ -510,6 +510,17 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	// Validate git credential Secret (if agentFiles.git.secretRef is set)
+	if err := r.validateGitSecretRef(ctx, instance); err != nil {
+		logger.Error(err, "Git secret validation failed")
+		setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after git secret validation failure")
+		}
+		return ctrl.Result{}, err
+	}
+
 	// Generate proxy config, apply ConfigMaps (proxy config + Vertex AI stub ADC)
 	proxyConfigJSON, err := r.applyProxyResources(ctx, instance, resolvedCreds)
 	if err != nil {
@@ -561,6 +572,11 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Stamp persona ConfigMap hash to trigger rollout on persona file changes
 	if err := stampPersonaConfigHash(objects, instance, personaData); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to stamp persona config hash: %w", err)
+	}
+
+	// Stamp git credential Secret version to trigger rollout on credential rotation
+	if err := r.stampGitSecretVersion(ctx, objects, instance); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to stamp git secret version: %w", err)
 	}
 
 	// Apply Claw Route and wait for ingress host to be populated
@@ -1617,6 +1633,12 @@ func clawReferencesSecret(instance clawv1alpha1.Claw, secretName string) bool {
 	}
 	if instance.Spec.Auth != nil && instance.Spec.Auth.PasswordSecretRef != nil {
 		if instance.Spec.Auth.PasswordSecretRef.Name == secretName {
+			return true
+		}
+	}
+	if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.Git != nil &&
+		instance.Spec.AgentFiles.Git.SecretRef != nil {
+		if instance.Spec.AgentFiles.Git.SecretRef.Name == secretName {
 			return true
 		}
 	}
