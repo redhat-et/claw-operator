@@ -1960,6 +1960,67 @@ deployment rolls out with the new persona.
 > To trigger an immediate reconcile, edit any field on the Claw
 > CR (e.g., add a label) or wait for the periodic resync.
 
+### Interaction with `agentFiles`
+
+`personaRef` and `agentFiles` work at different layers and
+compose naturally:
+
+- **`agentFiles`** seeds files onto the writable PVC during
+  init. These are user-owned — editable at runtime (unless
+  `applyPolicy: Always` re-seeds on restart).
+- **`personaRef`** mounts ConfigMap keys as read-only overlays
+  on top of the PVC. The overlay physically masks the PVC file
+  at that path.
+
+When both are set and have overlapping filenames (e.g., both
+provide `AGENTS.md`), the persona guard wins — the agent sees
+the ConfigMap version, which is read-only. The agentFiles
+version still exists on the PVC underneath but is invisible.
+
+This enables a useful pattern: seed a department profile from
+a private Git repo (via `agentFiles.git` with `secretRef`),
+then selectively lock down specific files with `personaRef`:
+
+```yaml
+spec:
+  config:
+    management: user
+  agentFiles:
+    git:
+      url: https://github.com/corp/configs.git
+      ref: main
+      path: hr-team
+      secretRef:
+        name: corp-git-creds
+  restrictions:
+    personaRef:
+      name: hr-guardrails   # overrides SOUL.md only
+```
+
+In this example, the HR team gets their full profile from the
+private repo (AGENTS.md, skills, config), but SOUL.md is
+locked down by the admin via the persona guard. The team can
+edit AGENTS.md freely; SOUL.md is immutable.
+
+> **Note:** `personaRef` is not controlled by `mergeMode`.
+> `mergeMode` governs `openclaw.json` (application config).
+> `personaRef` is a filesystem-level overlay independent of
+> the config merge pipeline.
+
+### Known limitation: persona ConfigMap change detection
+
+Edits to the persona ConfigMap are not automatically detected
+by the operator. The operator's ConfigMap cache is scoped to
+operator-managed ConfigMaps, so user-created ConfigMaps are
+invisible to the watch. After updating a persona ConfigMap,
+trigger a reconcile by editing the Claw CR:
+
+```sh
+oc annotate claw instance -n $NS reconcile=$(date +%s) --overwrite
+```
+
+This will be fixed in a future release.
+
 ### `restrictions` field reference
 
 | Field | Type | Default | Description |
