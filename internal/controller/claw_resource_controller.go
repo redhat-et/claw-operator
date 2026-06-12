@@ -1555,6 +1555,11 @@ func (r *ClawResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.findClawsReferencingSecret),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.findClawsReferencingPersonaConfigMap),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
 		Named("claw").
 		Complete(r)
 }

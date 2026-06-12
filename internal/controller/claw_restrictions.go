@@ -30,7 +30,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -149,6 +151,38 @@ func sortedPersonaKeys(data map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// findClawsReferencingPersonaConfigMap maps a ConfigMap change to the Claw(s)
+// whose spec.restrictions.personaRef.name matches. Operator-owned ConfigMaps
+// (with an owner ref) are handled by Owns() and skipped here.
+func (r *ClawResourceReconciler) findClawsReferencingPersonaConfigMap(
+	ctx context.Context, obj client.Object,
+) []reconcile.Request {
+	if owner := metav1.GetControllerOf(obj); owner != nil &&
+		owner.Kind == ClawResourceKind {
+		return nil
+	}
+
+	clawList := &clawv1alpha1.ClawList{}
+	if err := r.List(ctx, clawList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, instance := range clawList.Items {
+		if instance.Spec.Restrictions != nil &&
+			instance.Spec.Restrictions.PersonaRef != nil &&
+			instance.Spec.Restrictions.PersonaRef.Name == obj.GetName() {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      instance.Name,
+					Namespace: instance.Namespace,
+				},
+			})
+		}
+	}
+	return requests
 }
 
 // pluginInstallationDisabled returns true when the operator should skip
