@@ -1126,7 +1126,7 @@ func (r *ClawResourceReconciler) stampGitSecretVersion(
 			obj.Object, annotations, "spec", "template", "metadata", "annotations",
 		)
 	}
-	return nil
+	return fmt.Errorf("gateway deployment %s not found for git secret version stamping", gatewayName)
 }
 
 // validateGitSecretRef checks that the Secret referenced by
