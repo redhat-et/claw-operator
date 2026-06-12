@@ -963,6 +963,85 @@ func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
 		assert.Equal(t, "demos/software-qa-mcp", envMap["AGENT_FILES_GIT_PATH"])
 		assert.Equal(t, "Always", envMap["AGENT_FILES_APPLY_POLICY"])
 	})
+
+	t.Run("wires git secretRef volume and env", func(t *testing.T) {
+		objects := makeDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git: &clawv1alpha1.AgentFilesGitSource{
+				URL: "https://github.com/corp/configs.git",
+				SecretRef: &clawv1alpha1.GitSecretRef{
+					Name: "corp-git-creds",
+				},
+			},
+		}
+
+		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+
+		// Verify env var on init-config
+		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
+		initConfig := initContainers[0].(map[string]any)
+		envVars := initConfig["env"].([]any)
+		envMap := map[string]string{}
+		for _, e := range envVars {
+			env := e.(map[string]any)
+			if v, ok := env["value"].(string); ok {
+				envMap[env["name"].(string)] = v
+			}
+		}
+		assert.Equal(t, "/etc/git-credentials", envMap["AGENT_FILES_GIT_SECRET_DIR"])
+
+		// Verify volumeMount on init-config
+		mounts := initConfig["volumeMounts"].([]any)
+		var gitMount map[string]any
+		for _, m := range mounts {
+			mount := m.(map[string]any)
+			if mount["name"] == "git-credentials" {
+				gitMount = mount
+				break
+			}
+		}
+		require.NotNil(t, gitMount, "git-credentials mount should exist on init-config")
+		assert.Equal(t, "/etc/git-credentials", gitMount["mountPath"])
+		assert.Equal(t, true, gitMount["readOnly"])
+
+		// Verify volume on deployment
+		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
+		var gitVol map[string]any
+		for _, v := range volumes {
+			vol := v.(map[string]any)
+			if vol["name"] == "git-credentials" {
+				gitVol = vol
+				break
+			}
+		}
+		require.NotNil(t, gitVol, "git-credentials volume should exist")
+		secretSource := gitVol["secret"].(map[string]any)
+		assert.Equal(t, "corp-git-creds", secretSource["secretName"])
+	})
+
+	t.Run("no git-credentials volume when secretRef is nil", func(t *testing.T) {
+		objects := makeDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git: &clawv1alpha1.AgentFilesGitSource{
+				URL: "https://github.com/example/public.git",
+			},
+		}
+
+		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+
+		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
+		for _, v := range volumes {
+			vol := v.(map[string]any)
+			assert.NotEqual(t, "git-credentials", vol["name"],
+				"git-credentials volume should not exist when secretRef is nil")
+		}
+	})
 }
 
 // --- Kubernetes deployment configuration tests ---

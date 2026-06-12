@@ -90,6 +90,20 @@ spec:
                         description: Ref is the branch, tag, or commit to check out.
                           Defaults to the repository default branch.
                         type: string
+                      secretRef:
+                        description: |-
+                          SecretRef references a Secret containing Git credentials for private
+                          repositories. The Secret must have "username" and "password" keys.
+                          For GitHub, use a Personal Access Token as the password.
+                          For GitLab, use a deploy token or project access token.
+                        properties:
+                          name:
+                            description: Name is the Secret name in the Claw namespace.
+                            minLength: 1
+                            type: string
+                        required:
+                        - name
+                        type: object
                       url:
                         description: URL is the Git repository URL.
                         minLength: 1

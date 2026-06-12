@@ -1430,6 +1430,35 @@ spec:
       path: teams/platform
 ```
 
+**Private Git repo with credentials:**
+
+```sh
+oc create secret generic corp-git-creds \
+  --from-literal=username=deploy-bot \
+  --from-literal=password=ghp_YOUR_PAT_HERE \
+  -n $NS
+```
+
+```yaml
+spec:
+  config:
+    management: user
+  agentFiles:
+    git:
+      url: https://github.com/corp/claw-configs.git
+      ref: main
+      path: teams/platform
+      secretRef:
+        name: corp-git-creds
+```
+
+The Secret must have `username` and `password` keys. For
+GitHub, use the account username and a Personal Access Token.
+For GitLab, use a deploy token. The credentials are mounted
+read-only in the init container and cleaned up after the
+clone completes. Credential rotation (updating the Secret)
+triggers a pod rollout automatically.
+
 By default, seeded agent files use `applyPolicy: IfMissing`, so runtime edits on the PVC survive restarts. Set `applyPolicy: Always` only when the source should overwrite matching files on every pod start:
 
 ```yaml
