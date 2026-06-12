@@ -247,7 +247,7 @@ func TestStampPersonaConfigHash(t *testing.T) {
 		annotations, _, _ := unstructured.NestedStringMap(
 			objects[0].Object, "spec", "template", "metadata", "annotations",
 		)
-		hash, ok := annotations["claw.sandbox.redhat.com/persona-config-hash"]
+		hash, ok := annotations[clawv1alpha1.AnnotationKeyPersonaConfigHash]
 		assert.True(t, ok, "persona config hash annotation should be set")
 		assert.Len(t, hash, 64, "should be a SHA-256 hex string")
 	})
@@ -263,7 +263,7 @@ func TestStampPersonaConfigHash(t *testing.T) {
 		annotations, _, _ := unstructured.NestedStringMap(
 			objects[0].Object, "spec", "template", "metadata", "annotations",
 		)
-		_, ok := annotations["claw.sandbox.redhat.com/persona-config-hash"]
+		_, ok := annotations[clawv1alpha1.AnnotationKeyPersonaConfigHash]
 		assert.False(t, ok, "no annotation should be set")
 	})
 
@@ -288,8 +288,8 @@ func TestStampPersonaConfigHash(t *testing.T) {
 		ann2, _, _ := unstructured.NestedStringMap(
 			objects2[0].Object, "spec", "template", "metadata", "annotations",
 		)
-		assert.NotEqual(t, ann1["claw.sandbox.redhat.com/persona-config-hash"],
-			ann2["claw.sandbox.redhat.com/persona-config-hash"])
+		assert.NotEqual(t, ann1[clawv1alpha1.AnnotationKeyPersonaConfigHash],
+			ann2[clawv1alpha1.AnnotationKeyPersonaConfigHash])
 	})
 }
 
@@ -397,7 +397,7 @@ func TestPersonaGuardIntegration(t *testing.T) {
 		assert.Equal(t, "test-guardrails", personaVol.ConfigMap.Name)
 
 		// Check persona config hash annotation
-		hash, ok := deployment.Spec.Template.Annotations["claw.sandbox.redhat.com/persona-config-hash"]
+		hash, ok := deployment.Spec.Template.Annotations[clawv1alpha1.AnnotationKeyPersonaConfigHash]
 		assert.True(t, ok, "persona config hash annotation should be set")
 		assert.Len(t, hash, 64)
 

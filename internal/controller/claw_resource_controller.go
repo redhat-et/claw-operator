@@ -525,6 +525,12 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Resolve persona ConfigMap keys (if restrictions.personaRef is set)
 	personaKeys, personaData, err := r.resolvePersonaRef(ctx, instance)
 	if err != nil {
+		logger.Error(err, "Persona reference validation failed")
+		setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after persona validation failure")
+		}
 		return ctrl.Result{}, err
 	}
 	if len(personaKeys) == 0 {

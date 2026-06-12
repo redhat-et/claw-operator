@@ -246,7 +246,7 @@ func stampPersonaConfigHash(
 		if annotations == nil {
 			annotations = make(map[string]string)
 		}
-		annotations["claw.sandbox.redhat.com/persona-config-hash"] = hash
+		annotations[clawv1alpha1.AnnotationKeyPersonaConfigHash] = hash
 		if err := unstructured.SetNestedStringMap(
 			obj.Object, annotations, "spec", "template", "metadata", "annotations",
 		); err != nil {

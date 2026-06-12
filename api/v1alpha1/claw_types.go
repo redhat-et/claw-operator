@@ -88,6 +88,7 @@ const (
 const (
 	AnnotationKeyProxyConfigHash     = "claw.sandbox.redhat.com/proxy-config-hash"
 	AnnotationKeyGatewayConfigHash   = "claw.sandbox.redhat.com/gateway-config-hash"
+	AnnotationKeyPersonaConfigHash   = "claw.sandbox.redhat.com/persona-config-hash"
 	AnnotationPrefixSecretVersion    = "claw.sandbox.redhat.com/"
 	AnnotationSuffixSecretVersion    = "-secret-version"
 	AnnotationPrefixMcpSecretVersion = "claw.sandbox.redhat.com/mcp-"
