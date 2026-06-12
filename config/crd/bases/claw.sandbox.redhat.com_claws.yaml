@@ -837,6 +837,34 @@ spec:
                 items:
                   type: string
                 type: array
+              restrictions:
+                description: |-
+                  Restrictions configures runtime restrictions that limit agent and
+                  user capabilities. Use for regulated environments where behavioral
+                  guardrails must be immutable.
+                properties:
+                  personaRef:
+                    description: |-
+                      PersonaRef references a ConfigMap whose keys are mounted read-only
+                      into the workspace directory. Use this to make persona files
+                      (AGENTS.md, SOUL.md) immutable at runtime — the agent gets
+                      "read-only file system" when it tries to modify them.
+                    properties:
+                      name:
+                        description: Name is the ConfigMap name in the Claw namespace.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  pluginInstallation:
+                    description: |-
+                      PluginInstallation controls whether plugins can be installed.
+                      When set to false, the plugins init container is skipped regardless
+                      of spec.plugins content, and the agent cannot install plugins at runtime.
+                      Default: true (plugins are allowed).
+                    type: boolean
+                type: object
               skills:
                 additionalProperties:
                   type: string
