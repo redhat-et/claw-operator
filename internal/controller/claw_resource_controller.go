@@ -522,8 +522,23 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	// Resolve persona ConfigMap keys (if restrictions.personaRef is set)
+	personaKeys, personaData, err := r.resolvePersonaRef(ctx, instance)
+	if err != nil {
+		logger.Error(err, "Persona reference validation failed")
+		setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after persona validation failure")
+		}
+		return ctrl.Result{}, err
+	}
+	if len(personaKeys) == 0 {
+		meta.RemoveStatusCondition(&instance.Status.Conditions, clawv1alpha1.ConditionTypeRestrictionsEnforced)
+	}
+
 	// Apply deployment overrides (proxy image, pull policy, credentials)
-	if err := r.configureDeployments(instance, objects, resolvedCreds); err != nil {
+	if err := r.configureDeployments(instance, objects, resolvedCreds, personaKeys); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -541,6 +556,11 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Stamp MCP envFrom Secret versions on gateway deployment for rollout
 	if err := r.stampMcpSecretVersionAnnotation(ctx, objects, instance); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to stamp MCP secret version annotations: %w", err)
+	}
+
+	// Stamp persona ConfigMap hash to trigger rollout on persona file changes
+	if err := stampPersonaConfigHash(objects, instance, personaData); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to stamp persona config hash: %w", err)
 	}
 
 	// Apply Claw Route and wait for ingress host to be populated
@@ -819,6 +839,7 @@ func (r *ClawResourceReconciler) configureDeployments(
 	instance *clawv1alpha1.Claw,
 	objects []*unstructured.Unstructured,
 	resolvedCreds []resolvedCredential,
+	personaKeys []string,
 ) error {
 	if err := configureClawImage(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure OpenClaw image: %w", err)
@@ -856,7 +877,7 @@ func (r *ClawResourceReconciler) configureDeployments(
 			return fmt.Errorf("failed to configure metrics sidecar: %w", err)
 		}
 	}
-	if !userManagedConfig(instance) {
+	if !userManagedConfig(instance) && !pluginInstallationDisabled(instance) {
 		plugins := effectivePlugins(instance)
 		if len(plugins) > 0 {
 			if err := configurePluginsInitContainer(objects, instance, plugins); err != nil {
@@ -866,6 +887,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	}
 	if err := configureUserManagedOpenClawFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure user-managed OpenClaw files: %w", err)
+	}
+	if err := configurePersonaGuard(objects, instance, personaKeys); err != nil {
+		return fmt.Errorf("failed to configure persona guard: %w", err)
 	}
 	if err := configureGatewayNoProxy(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure gateway NO_PROXY: %w", err)
@@ -1529,6 +1553,11 @@ func (r *ClawResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.findClawsReferencingSecret),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.findClawsReferencingPersonaConfigMap),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Named("claw").

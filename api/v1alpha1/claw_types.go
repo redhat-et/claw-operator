@@ -81,12 +81,14 @@ const (
 	ConditionTypeMcpServersConfigured = "McpServersConfigured"
 	ConditionTypeWebSearchConfigured  = "WebSearchConfigured"
 	ConditionTypeIdle                 = "Idle"
+	ConditionTypeRestrictionsEnforced = "RestrictionsEnforced"
 )
 
 // Annotation keys used on pod templates to trigger rollouts on config changes.
 const (
 	AnnotationKeyProxyConfigHash     = "claw.sandbox.redhat.com/proxy-config-hash"
 	AnnotationKeyGatewayConfigHash   = "claw.sandbox.redhat.com/gateway-config-hash"
+	AnnotationKeyPersonaConfigHash   = "claw.sandbox.redhat.com/persona-config-hash"
 	AnnotationPrefixSecretVersion    = "claw.sandbox.redhat.com/"
 	AnnotationSuffixSecretVersion    = "-secret-version"
 	AnnotationPrefixMcpSecretVersion = "claw.sandbox.redhat.com/mcp-"
@@ -463,6 +465,33 @@ type AgentFilesGitSource struct {
 	Path string `json:"path,omitempty"`
 }
 
+// RestrictionsSpec configures runtime restrictions that limit what the agent
+// and users can do within the OpenClaw instance. These provide
+// filesystem-level enforcement that cannot be bypassed by the agent.
+type RestrictionsSpec struct {
+	// PersonaRef references a ConfigMap whose keys are mounted read-only
+	// into the workspace directory. Use this to make persona files
+	// (AGENTS.md, SOUL.md) immutable at runtime — the agent gets
+	// "read-only file system" when it tries to modify them.
+	// +optional
+	PersonaRef *PersonaRef `json:"personaRef,omitempty"`
+
+	// PluginInstallation controls whether plugins can be installed.
+	// When set to false, the plugins init container is skipped regardless
+	// of spec.plugins content, and the agent cannot install plugins at runtime.
+	// Default: true (plugins are allowed).
+	// +optional
+	PluginInstallation *bool `json:"pluginInstallation,omitempty"`
+}
+
+// PersonaRef references a ConfigMap containing persona files to mount read-only.
+type PersonaRef struct {
+	// Name is the ConfigMap name in the Claw namespace.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+}
+
 // MetricsSpec configures Prometheus metrics collection via an OTel Collector sidecar.
 type MetricsSpec struct {
 	// Enabled activates the OTel Collector sidecar and diagnostics.otel.metrics
@@ -648,6 +677,12 @@ type ClawSpec struct {
 	// (operator-managed).
 	// +optional
 	Skills map[string]string `json:"skills,omitempty"`
+
+	// Restrictions configures runtime restrictions that limit agent and
+	// user capabilities. Use for regulated environments where behavioral
+	// guardrails must be immutable.
+	// +optional
+	Restrictions *RestrictionsSpec `json:"restrictions,omitempty"`
 
 	// Idle, when set to true, instructs the operator to scale all managed
 	// Deployments to zero replicas. Set to false (or omit) to run normally.
