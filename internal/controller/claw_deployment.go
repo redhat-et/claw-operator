@@ -35,6 +35,8 @@ import (
 	clawv1alpha1 "github.com/codeready-toolchain/claw-operator/api/v1alpha1"
 )
 
+const gitCredentialsVolumeName = "git-credentials"
+
 // configureClawImage overrides the OpenClaw container image tag on the gateway
 // Deployment when spec.version is set. Affects init-volume, init-config (init
 // containers) and gateway (regular container).
@@ -624,7 +626,7 @@ func configureInitConfigForUserManaged(container map[string]any, instance *clawv
 			envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_SECRET_DIR", "/etc/git-credentials")
 			mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
 			mounts = setOrAppendVolumeMount(mounts, map[string]any{
-				"name":      "git-credentials",
+				"name":      gitCredentialsVolumeName,
 				"mountPath": "/etc/git-credentials",
 				"readOnly":  true,
 			})
@@ -1118,7 +1120,7 @@ func (r *ClawResourceReconciler) stampGitSecretVersion(
 		if annotations == nil {
 			annotations = make(map[string]string)
 		}
-		annotations[clawv1alpha1.AnnotationPrefixSecretVersion+"git-credentials"+
+		annotations[clawv1alpha1.AnnotationPrefixSecretVersion+gitCredentialsVolumeName+
 			clawv1alpha1.AnnotationSuffixSecretVersion] = secret.ResourceVersion
 		return unstructured.SetNestedStringMap(
 			obj.Object, annotations, "spec", "template", "metadata", "annotations",
@@ -1142,8 +1144,8 @@ func (r *ClawResourceReconciler) validateGitSecretRef(
 	secretName := instance.Spec.AgentFiles.Git.SecretRef.Name
 	secret := &corev1.Secret{}
 	if err := r.UserSecretReader.Get(ctx, client.ObjectKey{
-		Name:      secretName,
 		Namespace: instance.Namespace,
+		Name:      secretName,
 	}, secret); err != nil {
 		return fmt.Errorf("git credential Secret %q not found: %w", secretName, err)
 	}
