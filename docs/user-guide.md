@@ -178,7 +178,11 @@ spec:
 EOF
 ```
 
-OpenRouter model names use the `upstream-provider/model` convention (e.g., `openai/gpt-5.5`, `anthropic/claude-sonnet-4-6`). In the model picker, these appear as `openrouter/openai/gpt-5.5`, etc. To add additional OpenRouter models beyond the default catalog, use `spec.config.raw`:
+OpenRouter model names use the `upstream-provider/model` convention (e.g., `openai/gpt-5.5`, `anthropic/claude-sonnet-4-6`). In the model picker, these appear as `openrouter/openai/gpt-5.5`, etc.
+
+OpenRouter Fusion is opt-in. Add `openrouter/openrouter/fusion` through `spec.config.raw`; the operator then ensures the model entry has the required Fusion `extraBody` plugin wrapper, while preserving any user-supplied `analysis_models` and judge `model`. Fusion can have longer response times than direct single-model requests because OpenRouter may run multiple analysis models and a final judge/synthesis step.
+
+To add additional OpenRouter models beyond the default catalog, use `spec.config.raw`:
 
 ```yaml
 spec:
@@ -190,6 +194,15 @@ spec:
           models:
             openrouter/qwen/qwen3-coder:free:
               alias: Qwen3 Coder (free)
+            openrouter/openrouter/fusion:
+              alias: OpenRouter Fusion
+              params:
+                extraBody:
+                  plugins:
+                    - id: fusion
+                      analysis_models:
+                        - google/gemini-3.5-flash
+                      model: google/gemini-3.5-flash
 ```
 
 ### Vertex AI

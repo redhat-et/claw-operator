@@ -725,6 +725,14 @@ data:
     Models appear as `{provider}/{model-name}` (e.g., `google/gemini-3.5-flash`,
     `my-vllm/qwen3-14b`).
 
+    OpenRouter model names already include their upstream provider, so the picker keys
+    have three segments (e.g., `openrouter/openai/gpt-5.5`). OpenRouter Fusion is
+    opt-in: when users add `openrouter/openrouter/fusion` under
+    `agents.defaults.models`, the operator adds the required Fusion `extraBody` plugin
+    wrapper if missing and preserves user-supplied analysis models and judge model.
+    Fusion can have longer response times than direct single-model requests because
+    OpenRouter may run multiple analysis models and a final judge/synthesis step.
+
     ## Models are operator-managed
 
     The operator writes the model catalog into `operator.json` on every reconcile. This
@@ -828,8 +836,9 @@ data:
     ## User customization
 
     Users can add custom models (e.g., additional OpenRouter models beyond the default
-    catalog) via the CR or config patches. Both methods work — the CR is preferred for
-    declarative setups:
+    catalog) via the CR or config patches. OpenRouter Fusion must be declared this way
+    when users want it; it can have longer response times than direct single-model
+    requests. Both methods work — the CR is preferred for declarative setups:
 
     **Via `spec.config.raw` (declarative, persists across CR updates):**
     ```yaml

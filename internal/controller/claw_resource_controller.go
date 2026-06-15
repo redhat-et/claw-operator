@@ -1291,6 +1291,7 @@ func injectModelCatalog(config map[string]any, instance *clawv1alpha1.Claw) {
 	catalogModels := map[string]any{}
 	var catalogPrimary string
 	var catalogFallbacks []string
+	hasOpenRouterProvider := false
 
 	for _, cred := range instance.Spec.Credentials {
 		if cred.Provider == "" || cred.Type == clawv1alpha1.CredentialTypePathToken {
@@ -1305,6 +1306,9 @@ func injectModelCatalog(config map[string]any, instance *clawv1alpha1.Claw) {
 		}
 
 		logicalProvider := strings.TrimSuffix(providerKey, "-vertex")
+		if logicalProvider == "openrouter" {
+			hasOpenRouterProvider = true
+		}
 		catalog := providerModelCatalog(logicalProvider)
 		if len(catalog) == 0 {
 			continue
@@ -1352,6 +1356,9 @@ func injectModelCatalog(config map[string]any, instance *clawv1alpha1.Claw) {
 			userModels[key] = entry
 		}
 	}
+	if hasOpenRouterProvider {
+		configureUserOpenRouterFusionModel(userModels)
+	}
 	defaults["models"] = userModels
 
 	modelMap, _ := defaults["model"].(map[string]any)
@@ -1369,6 +1376,50 @@ func injectModelCatalog(config map[string]any, instance *clawv1alpha1.Claw) {
 		modelMap["fallbacks"] = fallbacksAny
 	}
 	defaults["model"] = modelMap
+}
+
+func configureUserOpenRouterFusionModel(models map[string]any) {
+	for _, key := range []string{"openrouter/openrouter/fusion", "openrouter/fusion"} {
+		rawEntry, exists := models[key]
+		if !exists {
+			continue
+		}
+		entry, ok := rawEntry.(map[string]any)
+		if !ok {
+			continue
+		}
+		params, _ := entry["params"].(map[string]any)
+		if params == nil {
+			params = map[string]any{}
+		}
+		extraBodyKey := "extraBody"
+		extraBody, _ := params[extraBodyKey].(map[string]any)
+		if snakeExtraBody, ok := params["extra_body"].(map[string]any); ok {
+			extraBodyKey = "extra_body"
+			extraBody = snakeExtraBody
+		}
+		if extraBody == nil {
+			extraBody = map[string]any{}
+		}
+		plugins, _ := extraBody["plugins"].([]any)
+		if !hasFusionPlugin(plugins) {
+			plugins = append(plugins, map[string]any{"id": "fusion"})
+		}
+		extraBody["plugins"] = plugins
+		params[extraBodyKey] = extraBody
+		entry["params"] = params
+		models[key] = entry
+	}
+}
+
+func hasFusionPlugin(plugins []any) bool {
+	for _, plugin := range plugins {
+		pluginMap, ok := plugin.(map[string]any)
+		if ok && pluginMap["id"] == "fusion" {
+			return true
+		}
+	}
+	return false
 }
 
 // injectKubePortsIntoNetworkPolicy adds non-443 ports from kubernetes credentials to
