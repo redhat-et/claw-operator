@@ -682,8 +682,8 @@ type ClawSpec struct {
 	// +optional
 	Workspace *WorkspaceSpec `json:"workspace,omitempty"`
 
-	// AgentFiles seeds user-managed OpenClaw files from a ConfigMap archive or Git repository.
-	// Intended for use with spec.config.management=user.
+	// AgentFiles seeds OpenClaw workspace files from a ConfigMap archive or Git repository.
+	// Works with both operator-managed and user-managed modes.
 	// +optional
 	AgentFiles *AgentFilesSpec `json:"agentFiles,omitempty"`
 

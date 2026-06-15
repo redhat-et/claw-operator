@@ -901,6 +901,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 			}
 		}
 	}
+	if err := configureAgentFiles(objects, instance); err != nil {
+		return fmt.Errorf("failed to configure agent files: %w", err)
+	}
 	if err := configureUserManagedOpenClawFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure user-managed OpenClaw files: %w", err)
 	}
