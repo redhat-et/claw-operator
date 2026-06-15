@@ -229,7 +229,7 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 # Dev targets derive IMG and PROXY_IMG from REGISTRY and TAG.
 # Usage: make dev-setup REGISTRY=quay.io/myuser
 ifndef TAG
-TAG := dev-$(shell git rev-parse --short HEAD)-$(shell date +%s)
+TAG := dev-$(shell git rev-parse --short HEAD)
 endif
 
 .PHONY: dev-build
