@@ -178,7 +178,23 @@ func (r *ClawResourceReconciler) cleanupSelfUpdateResources(
 	}
 
 	for _, obj := range resources {
-		if err := r.Delete(ctx, obj); err != nil {
+		key := client.ObjectKeyFromObject(obj)
+		existing := obj.DeepCopyObject().(client.Object)
+		if err := r.Get(ctx, key, existing); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("failed to get self-update resource %s/%s: %w",
+				obj.GetObjectKind().GroupVersionKind().Kind,
+				obj.GetName(), err)
+		}
+		if !isOwnedBy(existing, instance) {
+			logger.Info("Skipping deletion of resource not owned by this instance",
+				"kind", obj.GetObjectKind().GroupVersionKind().Kind,
+				"name", obj.GetName())
+			continue
+		}
+		if err := r.Delete(ctx, existing); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -191,6 +207,16 @@ func (r *ClawResourceReconciler) cleanupSelfUpdateResources(
 			"name", obj.GetName())
 	}
 	return nil
+}
+
+// isOwnedBy checks whether obj has an ownerReference pointing to the given owner.
+func isOwnedBy(obj client.Object, owner client.Object) bool {
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.UID == owner.GetUID() {
+			return true
+		}
+	}
+	return false
 }
 
 func configureClawDeploymentForSelfUpdate(
