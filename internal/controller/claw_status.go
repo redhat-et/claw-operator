@@ -200,17 +200,17 @@ func setReadyConditionWithDetail(
 func (r *ClawResourceReconciler) checkPodInitFailures(
 	ctx context.Context,
 	namespace, deploymentName string,
-) string {
+) (string, error) {
 	deployment := &appsv1.Deployment{}
 	if err := r.Get(ctx, client.ObjectKey{
 		Namespace: namespace, Name: deploymentName,
 	}, deployment); err != nil {
-		return ""
+		return "", fmt.Errorf("get deployment %s: %w", deploymentName, err)
 	}
 
 	selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("build selector for %s: %w", deploymentName, err)
 	}
 
 	pods := &corev1.PodList{}
@@ -218,7 +218,7 @@ func (r *ClawResourceReconciler) checkPodInitFailures(
 		client.InNamespace(namespace),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
-		return ""
+		return "", fmt.Errorf("list pods for %s: %w", deploymentName, err)
 	}
 
 	var failures []string
@@ -242,9 +242,9 @@ func (r *ClawResourceReconciler) checkPodInitFailures(
 	}
 
 	if len(failures) == 0 {
-		return ""
+		return "", nil
 	}
-	return strings.Join(failures, "; ")
+	return strings.Join(failures, "; "), nil
 }
 
 // getGatewayToken fetches the gateway token from the gateway token Secret and Base64-decodes it.
@@ -301,10 +301,16 @@ func (r *ClawResourceReconciler) updateStatus(ctx context.Context, instance *cla
 	}
 
 	// When deployments are not ready, inspect pods for init container failures
+	logger := log.FromContext(ctx)
 	var initFailureDetail string
 	if !ready {
 		for _, depName := range pending {
-			if detail := r.checkPodInitFailures(ctx, instance.Namespace, depName); detail != "" {
+			detail, err := r.checkPodInitFailures(ctx, instance.Namespace, depName)
+			if err != nil {
+				logger.Error(err, "failed to inspect init container failures", "deployment", depName)
+				continue
+			}
+			if detail != "" {
 				initFailureDetail = detail
 				break
 			}
@@ -341,9 +347,10 @@ func (r *ClawResourceReconciler) updateStatus(ctx context.Context, instance *cla
 	}
 
 	// Version downgrade detection
+	cmp, cmpOK := compareCalver(instance.Spec.Version, instance.Status.LastDeployedVersion)
 	if instance.Spec.Version != "" &&
 		instance.Status.LastDeployedVersion != "" &&
-		compareCalver(instance.Spec.Version, instance.Status.LastDeployedVersion) < 0 {
+		cmpOK && cmp < 0 {
 		setCondition(instance,
 			clawv1alpha1.ConditionTypeVersionDowngrade,
 			metav1.ConditionTrue,

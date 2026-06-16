@@ -802,23 +802,26 @@ const (
 
 func TestCompareCalver(t *testing.T) {
 	tests := []struct {
-		name string
-		a, b string
-		want int
+		name   string
+		a, b   string
+		want   int
+		wantOK bool
 	}{
-		{"a less than b", testVersionOld, testVersionMinPlugin, -1},
-		{"a greater than b", testVersionMinPlugin, testVersionOld, 1},
-		{"equal", testVersionMinPlugin, testVersionMinPlugin, 0},
-		{"numeric not lexicographic", "2026.10.1", "2026.9.30", 1},
-		{"year difference", "2027.1.1", "2026.12.31", 1},
-		{"different segment count", "2026.6", "2026.6.0", 0},
-		{"malformed a", "invalid", testVersionMinPlugin, 0},
-		{"malformed b", testVersionOld, "bad", 0},
-		{"both empty", "", "", 0},
+		{"a less than b", testVersionOld, testVersionMinPlugin, -1, true},
+		{"a greater than b", testVersionMinPlugin, testVersionOld, 1, true},
+		{"equal", testVersionMinPlugin, testVersionMinPlugin, 0, true},
+		{"numeric not lexicographic", "2026.10.1", "2026.9.30", 1, true},
+		{"year difference", "2027.1.1", "2026.12.31", 1, true},
+		{"different segment count", "2026.6", "2026.6.0", 0, true},
+		{"malformed a", "invalid", testVersionMinPlugin, 0, false},
+		{"malformed b", testVersionOld, "bad", 0, false},
+		{"both empty", "", "", 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, compareCalver(tt.a, tt.b))
+			got, ok := compareCalver(tt.a, tt.b)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantOK, ok)
 		})
 	}
 }

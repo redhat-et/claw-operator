@@ -925,23 +925,20 @@ func (r *ClawResourceReconciler) configureDeployments(
 			return fmt.Errorf("failed to configure metrics sidecar: %w", err)
 		}
 	}
+	if warning := checkPluginCompatibility(instance); warning != "" {
+		setCondition(instance, clawv1alpha1.ConditionTypePluginCompatibility,
+			metav1.ConditionFalse, clawv1alpha1.ConditionReasonIncompatible, warning)
+	} else {
+		meta.RemoveStatusCondition(&instance.Status.Conditions,
+			clawv1alpha1.ConditionTypePluginCompatibility)
+	}
 	if !pluginInstallationDisabled(instance) {
-		if warning := checkPluginCompatibility(instance); warning != "" {
-			setCondition(instance, clawv1alpha1.ConditionTypePluginCompatibility,
-				metav1.ConditionFalse, clawv1alpha1.ConditionReasonIncompatible, warning)
-		} else {
-			meta.RemoveStatusCondition(&instance.Status.Conditions,
-				clawv1alpha1.ConditionTypePluginCompatibility)
-		}
 		plugins := effectivePlugins(instance)
 		if len(plugins) > 0 {
 			if err := configurePluginsInitContainer(objects, instance, plugins); err != nil {
 				return fmt.Errorf("failed to configure plugins init container: %w", err)
 			}
 		}
-	} else {
-		meta.RemoveStatusCondition(&instance.Status.Conditions,
-			clawv1alpha1.ConditionTypePluginCompatibility)
 	}
 	if err := configureAgentFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure agent files: %w", err)

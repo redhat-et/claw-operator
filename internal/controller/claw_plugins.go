@@ -260,8 +260,8 @@ func pluginsNoProxy(instance *clawv1alpha1.Claw) string {
 
 // compareCalver compares two calver version strings (e.g. "2026.6.5").
 // Returns -1 if a < b, 0 if a == b, 1 if a > b.
-// Returns 0 for malformed input (fail-open).
-func compareCalver(a, b string) int {
+// The bool is false when either string is malformed (non-numeric segments).
+func compareCalver(a, b string) (int, bool) {
 	aParts := strings.Split(a, ".")
 	bParts := strings.Split(b, ".")
 
@@ -276,23 +276,23 @@ func compareCalver(a, b string) int {
 		if i < len(aParts) {
 			aVal, err = strconv.Atoi(aParts[i])
 			if err != nil {
-				return 0
+				return 0, false
 			}
 		}
 		if i < len(bParts) {
 			bVal, err = strconv.Atoi(bParts[i])
 			if err != nil {
-				return 0
+				return 0, false
 			}
 		}
 		if aVal < bVal {
-			return -1
+			return -1, true
 		}
 		if aVal > bVal {
-			return 1
+			return 1, true
 		}
 	}
-	return 0
+	return 0, true
 }
 
 // checkPluginCompatibility checks whether any implicitly required plugin
@@ -310,7 +310,14 @@ func checkPluginCompatibility(instance *clawv1alpha1.Claw) string {
 		if !ok || defaults.VertexPlugin == "" || defaults.PluginMinVersion == "" {
 			continue
 		}
-		if compareCalver(instance.Spec.Version, defaults.PluginMinVersion) < 0 {
+		cmp, ok := compareCalver(instance.Spec.Version, defaults.PluginMinVersion)
+		if !ok {
+			return fmt.Sprintf(
+				"cannot check plugin compatibility: spec.version %q is not a valid CalVer string",
+				instance.Spec.Version,
+			)
+		}
+		if cmp < 0 {
 			return fmt.Sprintf(
 				"plugin %s requires OpenClaw >= %s, but spec.version is %s",
 				defaults.VertexPlugin, defaults.PluginMinVersion, instance.Spec.Version,
