@@ -537,6 +537,37 @@ type ServiceMonitorSpec struct {
 	Interval string `json:"interval,omitempty"`
 }
 
+// TracesSpec configures distributed tracing via OTLP, forwarded through the
+// OTel Collector sidecar to an external OTLP endpoint.
+type TracesSpec struct {
+	// Enabled activates trace collection and forwarding.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Endpoint is the OTLP HTTP endpoint to forward traces to
+	// (e.g., "http://otel-collector.observability.svc:4318").
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// SamplingRatio controls the trace sampling rate as a string
+	// between "0" and "1" (e.g., "0.1" for 10% sampling).
+	// Default: "1" (sample all traces).
+	// +optional
+	// +kubebuilder:validation:Pattern=`^(0(\.\d+)?|1(\.0+)?)$`
+	SamplingRatio string `json:"samplingRatio,omitempty"`
+}
+
+// LogsSpec configures log forwarding via OTLP, forwarded through the
+// OTel Collector sidecar to an external OTLP endpoint.
+type LogsSpec struct {
+	// Enabled activates log forwarding.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Endpoint is the OTLP HTTP endpoint to forward logs to.
+	// Defaults to the traces endpoint when not specified.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
 // NetworkSpec configures network behavior for the gateway pod.
 type NetworkSpec struct {
 	// InClusterBypass controls whether the gateway pod can directly reach
@@ -664,6 +695,16 @@ type ClawSpec struct {
 	// Metrics configures Prometheus metrics collection via an OTel Collector sidecar.
 	// +optional
 	Metrics *MetricsSpec `json:"metrics,omitempty"`
+
+	// Traces configures distributed tracing via OTLP, forwarded through the
+	// OTel Collector sidecar to an external OTLP endpoint.
+	// +optional
+	Traces *TracesSpec `json:"traces,omitempty"`
+
+	// Logs configures log forwarding via OTLP, forwarded through the
+	// OTel Collector sidecar to an external OTLP endpoint.
+	// +optional
+	Logs *LogsSpec `json:"logs,omitempty"`
 
 	// Network configures network behavior for the gateway pod.
 	// Controls in-cluster proxy bypass and additional egress rules.

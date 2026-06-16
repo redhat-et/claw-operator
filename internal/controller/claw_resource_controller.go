@@ -780,6 +780,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	}
 
 	injectMetricsConfig(config, instance)
+	injectDiagnosticsConfig(config, instance)
 	injectSkipBootstrap(config, instance)
 	if !userManagedConfig(instance) {
 		injectBootstrapHook(config)
@@ -804,16 +805,8 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 			return fmt.Errorf("failed to inject Kubernetes skill: %w", err)
 		}
 	}
-	if metricsEnabled(instance) {
-		if err := injectOTelCollectorConfig(objects, instance); err != nil {
-			return fmt.Errorf("failed to inject OTel collector config: %w", err)
-		}
-		if err := addMetricsPortToService(objects, instance); err != nil {
-			return fmt.Errorf("failed to add metrics port to Service: %w", err)
-		}
-		if err := addMetricsIngressRule(objects, instance); err != nil {
-			return fmt.Errorf("failed to add metrics ingress rule: %w", err)
-		}
+	if err := injectObservabilityResources(objects, instance); err != nil {
+		return err
 	}
 	if err := injectKubePortsIntoNetworkPolicy(objects, resolvedCreds, instance.Name); err != nil {
 		return fmt.Errorf("failed to inject Kubernetes ports into NetworkPolicy: %w", err)
@@ -888,9 +881,12 @@ func (r *ClawResourceReconciler) configureDeployments(
 	if err := configureClawDeploymentForAuth(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure gateway for auth: %w", err)
 	}
-	if metricsEnabled(instance) {
+	if otelSidecarNeeded(instance) {
 		if err := configureMetricsSidecar(objects, instance, r.OTelCollectorImage); err != nil {
-			return fmt.Errorf("failed to configure metrics sidecar: %w", err)
+			return fmt.Errorf("failed to configure OTel sidecar: %w", err)
+		}
+		if err := injectOTelEnvVars(objects, instance); err != nil {
+			return fmt.Errorf("failed to inject OTel env vars: %w", err)
 		}
 	}
 	if !userManagedConfig(instance) && !pluginInstallationDisabled(instance) {
