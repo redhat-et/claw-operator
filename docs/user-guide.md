@@ -1395,7 +1395,25 @@ spec:
     management: user
 ```
 
-Use `spec.agentFiles` to seed an OpenClaw files tree from either a ConfigMap archive or a Git repository. `openclaw.json` in the source is used as the initial config seed. A top-level `workspace-main/` or `workspace/` directory is copied into the OpenClaw workspace; other top-level entries are copied under `/home/node/.openclaw`.
+### `spec.agentFiles`
+
+Use `spec.agentFiles` to seed an OpenClaw files tree from either a ConfigMap archive or a Git repository. `spec.agentFiles` works with both operator-managed and user-managed modes.
+
+`openclaw.json` in the source is used as the initial config seed. A top-level `workspace-main/` or `workspace/` directory is copied into the OpenClaw workspace; other top-level entries are copied under `/home/node/.openclaw`.
+
+In **operator-managed mode** (the default), `agentFiles` seeds
+workspace files (AGENTS.md, SOUL.md, skills, etc.) from your
+source. The operator's built-in files (AGENTS.md, SOUL.md) use
+`seedIfMissing`, so they will not overwrite what `agentFiles`
+already placed. Infrastructure skills (PLATFORM.md,
+KUBERNETES.md) are always added on top. This enables
+per-department profiles: ITOps seeds department-specific persona
+and skills from a Git repo while the operator manages
+infrastructure.
+
+In **user-managed mode**, the same seeding happens, plus the
+operator skips its own persona and skill injection entirely,
+giving the user full control over the workspace.
 
 **ConfigMap source:**
 
@@ -1409,8 +1427,6 @@ oc create configmap openclaw-agentfiles \
 
 ```yaml
 spec:
-  config:
-    management: user
   agentFiles:
     configMapRef:
       name: openclaw-agentfiles
@@ -1421,14 +1437,34 @@ spec:
 
 ```yaml
 spec:
-  config:
-    management: user
   agentFiles:
     git:
       url: https://github.com/example/openclaw-agentfiles.git
       ref: main
       path: teams/platform
 ```
+
+**Per-department profile (operator-managed with Git seeding):**
+
+```yaml
+spec:
+  credentials:
+    - name: anthropic
+      provider: anthropic
+      secretRef:
+        - name: shared-anthropic
+          key: api-key
+  agentFiles:
+    git:
+      url: https://github.com/corp/claw-configs.git
+      ref: v1.0.0
+      path: hr
+```
+
+In this example, the HR department gets a tailored persona
+(AGENTS.md, SOUL.md) and skills from the Git repo, while the
+operator still manages providers, models, and infrastructure
+skills. No `management: user` is needed.
 
 **Private Git repo with credentials:**
 
@@ -1441,8 +1477,6 @@ oc create secret generic corp-git-creds \
 
 ```yaml
 spec:
-  config:
-    management: user
   agentFiles:
     git:
       url: https://github.com/corp/claw-configs.git
@@ -1468,6 +1502,43 @@ spec:
     git:
       url: https://github.com/example/openclaw-agentfiles.git
 ```
+
+Use `readOnly` to protect specific workspace files from being
+modified by the agent at runtime. Protected files are mounted
+read-only via an emptyDir overlay — the agent gets
+"Read-only file system" when trying to edit them.
+
+```yaml
+spec:
+  agentFiles:
+    git:
+      url: https://github.com/corp/claw-configs.git
+      ref: main
+      path: hr-team
+    readOnly:
+      - SOUL.md
+      - TOOLS.md
+      - IDENTITY.md
+```
+
+Paths are relative to the workspace directory. Individual files
+get per-file subPath mounts. Directories (trailing `/` or
+`/**`) get whole-directory mounts:
+
+```yaml
+  agentFiles:
+    readOnly:
+      - SOUL.md                # single file
+      - skills/managed/        # entire directory
+      - skills/locked/**       # same as trailing /
+```
+
+Read-only protection on persona files (SOUL.md, AGENTS.md) is
+a strong defense — the agent cannot rewrite its own constraints.
+Read-only protection on skills is weaker when users can still
+create new skills alongside the protected ones. For full skill
+lockdown, combine readOnly with network restrictions
+(`builtinPassthroughs: []`).
 
 The operator does not sync runtime edits back to a ConfigMap or Git repository. To export the current OpenClaw files from the PVC:
 
@@ -1792,6 +1863,25 @@ enforcement backed by the Linux kernel.
 
 ### Read-only persona files (`personaRef`)
 
+> **Deprecated:** `personaRef` is superseded by
+> `spec.agentFiles.readOnly`, which protects files sourced from
+> the agentFiles Git/ConfigMap without requiring a separate
+> ConfigMap. New deployments should use `agentFiles.readOnly`
+> instead. `personaRef` continues to work for existing CRs.
+>
+> **Migration:** move persona files into your agentFiles Git repo
+> and list them in `readOnly`:
+> ```yaml
+> spec:
+>   agentFiles:
+>     git:
+>       url: https://github.com/corp/configs.git
+>       path: finance
+>     readOnly:
+>       - SOUL.md
+>       - AGENTS.md
+> ```
+
 `spec.restrictions.personaRef` references a ConfigMap whose keys
 are mounted read-only into the workspace directory. When the agent
 tries to modify these files, it gets `EROFS: read-only file
@@ -1982,8 +2072,6 @@ then selectively lock down specific files with `personaRef`:
 
 ```yaml
 spec:
-  config:
-    management: user
   agentFiles:
     git:
       url: https://github.com/corp/configs.git
@@ -1999,7 +2087,9 @@ spec:
 In this example, the HR team gets their full profile from the
 private repo (AGENTS.md, skills, config), but SOUL.md is
 locked down by the admin via the persona guard. The team can
-edit AGENTS.md freely; SOUL.md is immutable.
+edit AGENTS.md freely; SOUL.md is immutable. No
+`management: user` is required — `agentFiles` works in both
+management modes.
 
 > **Note:** `personaRef` is not controlled by `mergeMode`.
 > `mergeMode` governs `openclaw.json` (application config).

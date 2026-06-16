@@ -242,6 +242,56 @@ data:
       }
     }
 
+    function copyTreeAlways(src, dest) {
+      fs.mkdirSync(dest, { recursive: true });
+      for (const entry of fs.readdirSync(src)) {
+        const s = path.join(src, entry);
+        const d = path.join(dest, entry);
+        const stat = fs.lstatSync(s);
+        if (stat.isSymbolicLink()) continue;
+        if (stat.isDirectory()) {
+          copyTreeAlways(s, d);
+        } else {
+          copyAlways(s, d);
+        }
+      }
+    }
+
+    function copyProtectedFiles() {
+      const readOnlyStr = process.env.AGENT_FILES_READ_ONLY || "";
+      if (!readOnlyStr) return;
+      const entries = readOnlyStr.split(",").filter(Boolean);
+      const protectedDir = "/protected-files";
+      const missing = [];
+
+      for (const entry of entries) {
+        const isDir = entry.endsWith("/") || entry.endsWith("/**");
+        const clean = entry.replace(/\/\*\*$/, "").replace(/\/$/, "");
+        const src = path.join(workspaceDir, clean);
+        const dest = path.join(protectedDir, "workspace", clean);
+
+        if (!fs.existsSync(src)) {
+          missing.push(clean);
+          continue;
+        }
+
+        const stat = fs.lstatSync(src);
+        if (stat.isSymbolicLink()) continue;
+        if (isDir && stat.isDirectory()) {
+          copyTreeAlways(src, dest);
+        } else if (stat.isFile()) {
+          copyAlways(src, dest);
+        }
+      }
+      if (missing.length > 0) {
+        throw new Error(
+          "[init-config] readOnly paths not found in workspace: " + missing.join(", ") +
+          ". Check spec.agentFiles.readOnly for typos."
+        );
+      }
+      console.log("[init-config] protected " + entries.length + " read-only entries");
+    }
+
     // Ensure directories exist
     for (const sub of ["workspace", ".local", ".cache", ".config/codex"]) {
       fs.mkdirSync(path.join(pvcDir, sub), { recursive: true });
@@ -292,6 +342,7 @@ data:
     }
 
     seedAgentFiles(agentFilesSourceDir);
+    copyProtectedFiles();
 
     // Seed user-provided workspace files (_ws_* keys) before static seeds
     // so _ws_AGENTS.md takes precedence over the builtin AGENTS.md

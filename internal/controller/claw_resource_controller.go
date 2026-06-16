@@ -510,6 +510,21 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	// Validate readOnly paths (if agentFiles.readOnly is set)
+	if instance.Spec.AgentFiles != nil && len(instance.Spec.AgentFiles.ReadOnly) > 0 {
+		if err := validateReadOnlyPaths(instance.Spec.AgentFiles.ReadOnly); err != nil {
+			logger.Error(err, "readOnly path validation failed")
+			setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+				clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+			setCondition(instance, clawv1alpha1.ConditionTypeRestrictionsEnforced,
+				metav1.ConditionFalse, clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+			if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+				logger.Error(statusErr, "Failed to update status after readOnly validation failure")
+			}
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Validate git credential Secret (if agentFiles.git.secretRef is set)
 	if err := r.validateGitSecretRef(ctx, instance); err != nil {
 		logger.Error(err, "Git secret validation failed")
@@ -544,8 +559,23 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, err
 	}
-	if len(personaKeys) == 0 {
+	hasReadOnly := instance.Spec.AgentFiles != nil && len(instance.Spec.AgentFiles.ReadOnly) > 0
+	if len(personaKeys) == 0 && !hasReadOnly {
 		meta.RemoveStatusCondition(&instance.Status.Conditions, clawv1alpha1.ConditionTypeRestrictionsEnforced)
+	}
+	if len(personaKeys) > 0 || hasReadOnly {
+		var parts []string
+		if hasReadOnly {
+			parts = append(parts, fmt.Sprintf("read-only files active: %s",
+				strings.Join(instance.Spec.AgentFiles.ReadOnly, ", ")))
+		}
+		if len(personaKeys) > 0 {
+			parts = append(parts, fmt.Sprintf("persona guard active: %s",
+				strings.Join(personaKeys, ", ")))
+		}
+		setCondition(instance, clawv1alpha1.ConditionTypeRestrictionsEnforced,
+			metav1.ConditionTrue, clawv1alpha1.ConditionReasonConfigured,
+			strings.Join(parts, "; "))
 	}
 
 	// Apply deployment overrides (proxy image, pull policy, credentials)
@@ -900,6 +930,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 				return fmt.Errorf("failed to configure plugins init container: %w", err)
 			}
 		}
+	}
+	if err := configureAgentFiles(objects, instance); err != nil {
+		return fmt.Errorf("failed to configure agent files: %w", err)
 	}
 	if err := configureUserManagedOpenClawFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure user-managed OpenClaw files: %w", err)
