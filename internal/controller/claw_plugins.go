@@ -18,6 +18,7 @@ package controller
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -255,4 +256,66 @@ func pluginsNoProxy(instance *clawv1alpha1.Claw) string {
 		return base + noProxySuffix
 	}
 	return base
+}
+
+// compareCalver compares two calver version strings (e.g. "2026.6.5").
+// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+// Returns 0 for malformed input (fail-open).
+func compareCalver(a, b string) int {
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+
+	maxLen := len(aParts)
+	if len(bParts) > maxLen {
+		maxLen = len(bParts)
+	}
+
+	for i := range maxLen {
+		var aVal, bVal int
+		var err error
+		if i < len(aParts) {
+			aVal, err = strconv.Atoi(aParts[i])
+			if err != nil {
+				return 0
+			}
+		}
+		if i < len(bParts) {
+			bVal, err = strconv.Atoi(bParts[i])
+			if err != nil {
+				return 0
+			}
+		}
+		if aVal < bVal {
+			return -1
+		}
+		if aVal > bVal {
+			return 1
+		}
+	}
+	return 0
+}
+
+// checkPluginCompatibility checks whether any implicitly required plugin
+// has a minimum version that exceeds spec.version. Returns a warning
+// message or "" if all plugins are compatible.
+func checkPluginCompatibility(instance *clawv1alpha1.Claw) string {
+	if instance.Spec.Version == "" {
+		return ""
+	}
+	for _, cred := range instance.Spec.Credentials {
+		if !usesVertexSDK(cred) {
+			continue
+		}
+		defaults, ok := knownProviders[cred.Provider]
+		if !ok || defaults.VertexPlugin == "" || defaults.PluginMinVersion == "" {
+			continue
+		}
+		if compareCalver(instance.Spec.Version, defaults.PluginMinVersion) < 0 {
+			return fmt.Sprintf(
+				"plugin %s requires OpenClaw >= %s, but spec.version is %s",
+				defaults.VertexPlugin, defaults.PluginMinVersion, instance.Spec.Version,
+			)
+		}
+	}
+	return ""
 }

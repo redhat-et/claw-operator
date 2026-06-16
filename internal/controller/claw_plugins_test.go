@@ -794,3 +794,90 @@ func TestPluginsIntegration(t *testing.T) {
 		assert.NotEqual(t, hash1, hash2, "config hash should change when plugins change")
 	})
 }
+
+const (
+	testVersionOld       = "2026.6.5"
+	testVersionMinPlugin = "2026.6.8"
+)
+
+func TestCompareCalver(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want int
+	}{
+		{"a less than b", testVersionOld, testVersionMinPlugin, -1},
+		{"a greater than b", testVersionMinPlugin, testVersionOld, 1},
+		{"equal", testVersionMinPlugin, testVersionMinPlugin, 0},
+		{"numeric not lexicographic", "2026.10.1", "2026.9.30", 1},
+		{"year difference", "2027.1.1", "2026.12.31", 1},
+		{"different segment count", "2026.6", "2026.6.0", 0},
+		{"malformed a", "invalid", testVersionMinPlugin, 0},
+		{"malformed b", testVersionOld, "bad", 0},
+		{"both empty", "", "", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, compareCalver(tt.a, tt.b))
+		})
+	}
+}
+
+func TestCheckPluginCompatibility(t *testing.T) {
+	t.Run("no version set", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+				GCP: &clawv1alpha1.GCPConfig{Project: "proj"}},
+		}
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+
+	t.Run("compatible version", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionMinPlugin
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+				GCP: &clawv1alpha1.GCPConfig{Project: "proj"}},
+		}
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+
+	t.Run("incompatible version", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionOld
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+				GCP: &clawv1alpha1.GCPConfig{Project: "proj"}},
+		}
+		result := checkPluginCompatibility(instance)
+		assert.Contains(t, result, testVersionMinPlugin)
+		assert.Contains(t, result, testVersionOld)
+		assert.Contains(t, result, "@openclaw/anthropic-vertex-provider")
+	})
+
+	t.Run("non-vertex credential", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionOld
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "api", Type: clawv1alpha1.CredentialTypeAPIKey, Provider: "anthropic"},
+		}
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+
+	t.Run("google gcp has no vertex plugin", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionOld
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "google",
+				GCP: &clawv1alpha1.GCPConfig{Project: "proj"}},
+		}
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+
+	t.Run("no credentials", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionOld
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+}

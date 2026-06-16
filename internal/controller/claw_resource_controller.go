@@ -409,6 +409,7 @@ type ClawResourceReconciler struct {
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -925,12 +926,22 @@ func (r *ClawResourceReconciler) configureDeployments(
 		}
 	}
 	if !pluginInstallationDisabled(instance) {
+		if warning := checkPluginCompatibility(instance); warning != "" {
+			setCondition(instance, clawv1alpha1.ConditionTypePluginCompatibility,
+				metav1.ConditionFalse, clawv1alpha1.ConditionReasonIncompatible, warning)
+		} else {
+			meta.RemoveStatusCondition(&instance.Status.Conditions,
+				clawv1alpha1.ConditionTypePluginCompatibility)
+		}
 		plugins := effectivePlugins(instance)
 		if len(plugins) > 0 {
 			if err := configurePluginsInitContainer(objects, instance, plugins); err != nil {
 				return fmt.Errorf("failed to configure plugins init container: %w", err)
 			}
 		}
+	} else {
+		meta.RemoveStatusCondition(&instance.Status.Conditions,
+			clawv1alpha1.ConditionTypePluginCompatibility)
 	}
 	if err := configureAgentFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure agent files: %w", err)

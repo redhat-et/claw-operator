@@ -1060,6 +1060,11 @@ spec:
                 description: GatewayURL is the HTTPS URL for accessing the Claw gateway,
                   including the auth token fragment when applicable
                 type: string
+              lastDeployedVersion:
+                description: |-
+                  LastDeployedVersion records the spec.version that was last successfully deployed.
+                  Used to detect version downgrades that may cause PVC data incompatibility.
+                type: string
               url:
                 description: |-
                   Deprecated: Use GatewayURL instead. Will be removed in a future version.

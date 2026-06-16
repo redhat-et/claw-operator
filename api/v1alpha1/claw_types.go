@@ -82,6 +82,8 @@ const (
 	ConditionTypeWebSearchConfigured  = "WebSearchConfigured"
 	ConditionTypeIdle                 = "Idle"
 	ConditionTypeRestrictionsEnforced = "RestrictionsEnforced"
+	ConditionTypePluginCompatibility  = "PluginCompatibility"
+	ConditionTypeVersionDowngrade     = "VersionDowngrade"
 )
 
 // Annotation keys used on pod templates to trigger rollouts on config changes.
@@ -97,14 +99,17 @@ const (
 
 // Condition reasons for Claw status.
 const (
-	ConditionReasonReady            = "Ready"
-	ConditionReasonProvisioning     = "Provisioning"
-	ConditionReasonResolved         = "Resolved"
-	ConditionReasonValidationFailed = "ValidationFailed"
-	ConditionReasonConfigured       = "Configured"
-	ConditionReasonConfigFailed     = "ConfigFailed"
-	ConditionReasonIdle             = "Idle"
-	ConditionReasonIdledByRequest   = "IdledByRequest"
+	ConditionReasonReady                = "Ready"
+	ConditionReasonProvisioning         = "Provisioning"
+	ConditionReasonResolved             = "Resolved"
+	ConditionReasonValidationFailed     = "ValidationFailed"
+	ConditionReasonConfigured           = "Configured"
+	ConditionReasonConfigFailed         = "ConfigFailed"
+	ConditionReasonIdle                 = "Idle"
+	ConditionReasonIdledByRequest       = "IdledByRequest"
+	ConditionReasonIncompatible         = "Incompatible"
+	ConditionReasonVersionDowngrade     = "VersionDowngrade"
+	ConditionReasonInitContainerFailure = "InitContainerFailure"
 )
 
 // SecretRefEntry references a specific key in a Secret.
@@ -743,6 +748,11 @@ type ClawStatus struct {
 	// GatewayURL is the HTTPS URL for accessing the Claw gateway, including the auth token fragment when applicable
 	// +optional
 	GatewayURL string `json:"gatewayURL,omitempty"`
+
+	// LastDeployedVersion records the spec.version that was last successfully deployed.
+	// Used to detect version downgrades that may cause PVC data incompatibility.
+	// +optional
+	LastDeployedVersion string `json:"lastDeployedVersion,omitempty"`
 }
 
 // +kubebuilder:object:root=true
