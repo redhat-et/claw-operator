@@ -112,6 +112,16 @@ spec:
                     required:
                     - url
                     type: object
+                  readOnly:
+                    description: |-
+                      ReadOnly lists workspace-relative paths to mount read-only on the
+                      gateway container. The agent gets "read-only file system" when it
+                      tries to modify protected files.
+                      Individual files (e.g., "SOUL.md") get subPath mounts.
+                      Directories (trailing "/" or "/**") get whole-directory mounts.
+                    items:
+                      type: string
+                    type: array
                 type: object
                 x-kubernetes-validations:
                 - message: one of configMapRef or git is required
@@ -860,9 +870,10 @@ spec:
                   personaRef:
                     description: |-
                       PersonaRef references a ConfigMap whose keys are mounted read-only
-                      into the workspace directory. Use this to make persona files
-                      (AGENTS.md, SOUL.md) immutable at runtime — the agent gets
-                      "read-only file system" when it tries to modify them.
+                      into the workspace directory.
+                      Deprecated: use spec.agentFiles.readOnly instead, which protects
+                      files sourced from the agentFiles Git/ConfigMap without requiring
+                      a separate ConfigMap.
                     properties:
                       name:
                         description: Name is the ConfigMap name in the Claw namespace.

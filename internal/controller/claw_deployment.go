@@ -36,6 +36,7 @@ import (
 )
 
 const gitCredentialsVolumeName = "git-credentials"
+const protectedFilesVolumeName = "protected-files"
 
 // configureClawImage overrides the OpenClaw container image tag on the gateway
 // Deployment when spec.version is set. Affects init-volume, init-config (init
@@ -659,10 +660,22 @@ func configureAgentFiles(objects []*unstructured.Unstructured, instance *clawv1a
 				},
 			})
 		}
+		if len(instance.Spec.AgentFiles.ReadOnly) > 0 {
+			volumes = setOrAppendVolume(volumes, map[string]any{
+				"name":     protectedFilesVolumeName,
+				"emptyDir": map[string]any{},
+			})
+		}
 		if err := unstructured.SetNestedSlice(
 			obj.Object, volumes, "spec", "template", "spec", "volumes",
 		); err != nil {
 			return fmt.Errorf("failed to set volumes on claw deployment: %w", err)
+		}
+
+		if len(instance.Spec.AgentFiles.ReadOnly) > 0 {
+			if err := configureReadOnlyMounts(obj, instance.Spec.AgentFiles.ReadOnly); err != nil {
+				return fmt.Errorf("failed to configure read-only mounts: %w", err)
+			}
 		}
 		return nil
 	}
@@ -710,7 +723,68 @@ func configureAgentFilesOnInitConfig(container map[string]any, instance *clawv1a
 			}
 		}
 	}
+	if len(instance.Spec.AgentFiles.ReadOnly) > 0 {
+		envVars = setOrAppendEnv(envVars, "AGENT_FILES_READ_ONLY",
+			strings.Join(instance.Spec.AgentFiles.ReadOnly, ","))
+		mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+		mounts = setOrAppendVolumeMount(mounts, map[string]any{
+			"name":      protectedFilesVolumeName,
+			"mountPath": "/protected-files",
+		})
+		if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
+			return fmt.Errorf("failed to set init-config protected files mount: %w", err)
+		}
+	}
 	return unstructured.SetNestedSlice(container, envVars, "env")
+}
+
+// configureReadOnlyMounts adds read-only subPath mounts on the gateway container
+// for each readOnly entry. Individual files get per-file subPath mounts;
+// directory entries (trailing "/" or "/**") get whole-directory mounts.
+func configureReadOnlyMounts(obj *unstructured.Unstructured, readOnly []string) error {
+	containers, found, err := unstructured.NestedSlice(
+		obj.Object, "spec", "template", "spec", "containers",
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get containers from claw deployment: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("containers field not found in claw deployment")
+	}
+
+	gatewayFound := false
+	for i, c := range containers {
+		container, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(container, "name")
+		if name != ClawGatewayContainerName {
+			continue
+		}
+		gatewayFound = true
+
+		mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+		for _, entry := range readOnly {
+			clean := strings.TrimSuffix(strings.TrimSuffix(entry, "/**"), "/")
+			mounts = setOrAppendVolumeMount(mounts, map[string]any{
+				"name":      protectedFilesVolumeName,
+				"mountPath": workspaceDir + "/" + clean,
+				"subPath":   "workspace/" + clean,
+				"readOnly":  true,
+			})
+		}
+		if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
+			return fmt.Errorf("failed to set read-only mounts on gateway: %w", err)
+		}
+		containers[i] = container
+	}
+	if !gatewayFound {
+		return fmt.Errorf("container %q not found in claw deployment", ClawGatewayContainerName)
+	}
+	return unstructured.SetNestedSlice(
+		obj.Object, containers, "spec", "template", "spec", "containers",
+	)
 }
 
 // configureUserManagedOpenClawFiles sets management-mode-specific configuration

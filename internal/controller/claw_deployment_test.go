@@ -1051,6 +1051,127 @@ func TestConfigureAgentFiles(t *testing.T) {
 		assert.Empty(t, envMap[ClawConfigManagementEnvVar],
 			"configureAgentFiles should not set management mode")
 	})
+
+	t.Run("readOnly adds protected-files volume and env var", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git:      &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+			ReadOnly: []string{"SOUL.md", "TOOLS.md"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		envMap := initConfigEnvMap(objects)
+		assert.Equal(t, "SOUL.md,TOOLS.md", envMap["AGENT_FILES_READ_ONLY"])
+
+		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
+		var protectedVol map[string]any
+		for _, v := range volumes {
+			vol := v.(map[string]any)
+			if vol["name"] == protectedFilesVolumeName {
+				protectedVol = vol
+				break
+			}
+		}
+		require.NotNil(t, protectedVol, "protected-files volume should exist")
+		assert.NotNil(t, protectedVol["emptyDir"], "should be an emptyDir volume")
+	})
+
+	t.Run("readOnly mounts files read-only on gateway", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git:      &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+			ReadOnly: []string{"SOUL.md", "TOOLS.md"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		containers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "containers",
+		)
+		gateway := containers[0].(map[string]any)
+		mounts, _, _ := unstructured.NestedSlice(gateway, "volumeMounts")
+
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": workspaceDir + "/SOUL.md",
+			"subPath": "workspace/SOUL.md", "readOnly": true,
+		})
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": workspaceDir + "/TOOLS.md",
+			"subPath": "workspace/TOOLS.md", "readOnly": true,
+		})
+	})
+
+	t.Run("readOnly mounts directories read-only on gateway", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git:      &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+			ReadOnly: []string{"skills/managed/", "skills/locked/**"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		containers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "containers",
+		)
+		gateway := containers[0].(map[string]any)
+		mounts, _, _ := unstructured.NestedSlice(gateway, "volumeMounts")
+
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": workspaceDir + "/skills/managed",
+			"subPath": "workspace/skills/managed", "readOnly": true,
+		})
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": workspaceDir + "/skills/locked",
+			"subPath": "workspace/skills/locked", "readOnly": true,
+		})
+	})
+
+	t.Run("readOnly init-config gets writable emptyDir mount", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git:      &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+			ReadOnly: []string{"SOUL.md"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		initContainers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "initContainers",
+		)
+		initConfig := initContainers[0].(map[string]any)
+		mounts, _, _ := unstructured.NestedSlice(initConfig, "volumeMounts")
+
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": "/protected-files",
+		})
+	})
+
+	t.Run("no protected-files volume when readOnly is empty", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git: &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
+		for _, v := range volumes {
+			vol := v.(map[string]any)
+			assert.NotEqual(t, protectedFilesVolumeName, vol["name"],
+				"protected-files volume should not exist when readOnly is empty")
+		}
+	})
 }
 
 func TestConfigureUserManagedOpenClawFiles(t *testing.T) {

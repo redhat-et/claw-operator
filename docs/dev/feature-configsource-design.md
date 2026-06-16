@@ -1,6 +1,6 @@
 # Enterprise Configuration Design
 
-Status: **agentFiles decoupled from user mode (PR #9) — readOnly next**
+Status: **readOnly implemented, personaRef deprecated — management mode deprecation next**
 
 ## What's shipped
 
@@ -359,10 +359,8 @@ to the PVC.
 1. ~~**Read-only persona**~~ — done (PR #7, `spec.restrictions`)
 2. ~~**Add secretRef**~~ — done (PR #8, `agentFiles.git.secretRef`)
 3. ~~**Decouple agentFiles from user mode**~~ — done (PR #9)
-4. **Add readOnly to agentFiles** — emptyDir overlay mechanism,
-   supports files and directory patterns
-5. **Deprecate personaRef** — migrate to `agentFiles.readOnly`,
-   keep personaRef working but document as deprecated
+4. ~~**Add readOnly to agentFiles**~~ — done (PR #10)
+5. ~~**Deprecate personaRef**~~ — done (PR #10)
 6. **Deprecate management mode** — derive behavior from
    agentFiles + readOnly + mergeMode
 7. **Documentation** — update enterprise onboarding workflows

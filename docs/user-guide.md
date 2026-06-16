@@ -1503,6 +1503,43 @@ spec:
       url: https://github.com/example/openclaw-agentfiles.git
 ```
 
+Use `readOnly` to protect specific workspace files from being
+modified by the agent at runtime. Protected files are mounted
+read-only via an emptyDir overlay — the agent gets
+"Read-only file system" when trying to edit them.
+
+```yaml
+spec:
+  agentFiles:
+    git:
+      url: https://github.com/corp/claw-configs.git
+      ref: main
+      path: hr-team
+    readOnly:
+      - SOUL.md
+      - TOOLS.md
+      - IDENTITY.md
+```
+
+Paths are relative to the workspace directory. Individual files
+get per-file subPath mounts. Directories (trailing `/` or
+`/**`) get whole-directory mounts:
+
+```yaml
+  agentFiles:
+    readOnly:
+      - SOUL.md                # single file
+      - skills/managed/        # entire directory
+      - skills/locked/**       # same as trailing /
+```
+
+Read-only protection on persona files (SOUL.md, AGENTS.md) is
+a strong defense — the agent cannot rewrite its own constraints.
+Read-only protection on skills is weaker when users can still
+create new skills alongside the protected ones. For full skill
+lockdown, combine readOnly with network restrictions
+(`builtinPassthroughs: []`).
+
 The operator does not sync runtime edits back to a ConfigMap or Git repository. To export the current OpenClaw files from the PVC:
 
 ```sh
@@ -1825,6 +1862,25 @@ not enough. `spec.restrictions` provides filesystem-level
 enforcement backed by the Linux kernel.
 
 ### Read-only persona files (`personaRef`)
+
+> **Deprecated:** `personaRef` is superseded by
+> `spec.agentFiles.readOnly`, which protects files sourced from
+> the agentFiles Git/ConfigMap without requiring a separate
+> ConfigMap. New deployments should use `agentFiles.readOnly`
+> instead. `personaRef` continues to work for existing CRs.
+>
+> **Migration:** move persona files into your agentFiles Git repo
+> and list them in `readOnly`:
+> ```yaml
+> spec:
+>   agentFiles:
+>     git:
+>       url: https://github.com/corp/configs.git
+>       path: finance
+>     readOnly:
+>       - SOUL.md
+>       - AGENTS.md
+> ```
 
 `spec.restrictions.personaRef` references a ConfigMap whose keys
 are mounted read-only into the workspace directory. When the agent

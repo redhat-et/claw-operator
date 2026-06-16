@@ -510,6 +510,19 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	// Validate readOnly paths (if agentFiles.readOnly is set)
+	if instance.Spec.AgentFiles != nil && len(instance.Spec.AgentFiles.ReadOnly) > 0 {
+		if err := validateReadOnlyPaths(instance.Spec.AgentFiles.ReadOnly); err != nil {
+			logger.Error(err, "readOnly path validation failed")
+			setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+				clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+			if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+				logger.Error(statusErr, "Failed to update status after readOnly validation failure")
+			}
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Validate git credential Secret (if agentFiles.git.secretRef is set)
 	if err := r.validateGitSecretRef(ctx, instance); err != nil {
 		logger.Error(err, "Git secret validation failed")

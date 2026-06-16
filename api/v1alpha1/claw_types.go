@@ -416,7 +416,7 @@ type WorkspaceSpec struct {
 	Files map[string]string `json:"files,omitempty"`
 }
 
-// AgentFilesSpec configures a seed source for user-managed OpenClaw files.
+// AgentFilesSpec configures a seed source for OpenClaw workspace files.
 // +kubebuilder:validation:XValidation:rule="has(self.configMapRef) || has(self.git)",message="one of configMapRef or git is required"
 // +kubebuilder:validation:XValidation:rule="!(has(self.configMapRef) && has(self.git))",message="configMapRef and git are mutually exclusive"
 type AgentFilesSpec struct {
@@ -433,6 +433,14 @@ type AgentFilesSpec struct {
 	// Git clones an agent files tree from a Git repository in the init container.
 	// +optional
 	Git *AgentFilesGitSource `json:"git,omitempty"`
+
+	// ReadOnly lists workspace-relative paths to mount read-only on the
+	// gateway container. The agent gets "read-only file system" when it
+	// tries to modify protected files.
+	// Individual files (e.g., "SOUL.md") get subPath mounts.
+	// Directories (trailing "/" or "/**") get whole-directory mounts.
+	// +optional
+	ReadOnly []string `json:"readOnly,omitempty"`
 }
 
 // AgentFilesConfigMapRef references a ConfigMap archive with agent files.
@@ -485,9 +493,10 @@ type GitSecretRef struct {
 // filesystem-level enforcement that cannot be bypassed by the agent.
 type RestrictionsSpec struct {
 	// PersonaRef references a ConfigMap whose keys are mounted read-only
-	// into the workspace directory. Use this to make persona files
-	// (AGENTS.md, SOUL.md) immutable at runtime — the agent gets
-	// "read-only file system" when it tries to modify them.
+	// into the workspace directory.
+	// Deprecated: use spec.agentFiles.readOnly instead, which protects
+	// files sourced from the agentFiles Git/ConfigMap without requiring
+	// a separate ConfigMap.
 	// +optional
 	PersonaRef *PersonaRef `json:"personaRef,omitempty"`
 
