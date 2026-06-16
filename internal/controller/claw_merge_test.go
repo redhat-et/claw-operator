@@ -319,6 +319,69 @@ func TestMergeJS(t *testing.T) {
 		assert.Contains(t, result.stdout, "preserved user openclaw.json")
 	})
 
+	t.Run("user-managed restart refreshes operator-managed channels", func(t *testing.T) {
+		operatorJSON := `{
+			"gateway": { "mode": "local", "bind": "lan", "port": 18789, "auth": { "mode": "token" } },
+			"channels": {
+				"telegram": {
+					"enabled": true,
+					"botToken": "placeholder",
+					"dmPolicy": "allowlist",
+					"allowFrom": [8327942761]
+				}
+			},
+			"plugins": {
+				"entries": {
+					"telegram": { "enabled": true },
+					"brave": { "enabled": true }
+				}
+			}
+		}`
+		pvcJSON := `{
+			"channels": {
+				"matrix": { "enabled": true },
+				"telegram": {
+					"enabled": false,
+					"dmPolicy": "open",
+					"allowFrom": ["*"]
+				}
+			},
+			"plugins": {
+				"entries": {
+					"matrix": { "enabled": true },
+					"telegram": { "enabled": false }
+				}
+			}
+		}`
+
+		result := runMergeJS(t, mergeTestSetup{
+			operatorJSON: operatorJSON,
+			pvcJSON:      pvcJSON,
+			extraEnv: map[string]string{
+				"CLAW_CONFIG_MANAGEMENT": "user",
+			},
+		})
+
+		dmPolicy, hasDMPolicy := nestedValue(result.config, "channels.telegram.dmPolicy")
+		require.True(t, hasDMPolicy, "operator-managed Telegram channel should be refreshed")
+		assert.Equal(t, "allowlist", dmPolicy)
+
+		allowFrom, hasAllowFrom := nestedValue(result.config, "channels.telegram.allowFrom")
+		require.True(t, hasAllowFrom, "operator-managed Telegram allowlist should be refreshed")
+		assert.Equal(t, []any{float64(8327942761)}, allowFrom)
+
+		telegramEnabled, hasTelegramPlugin := nestedValue(result.config, "plugins.entries.telegram.enabled")
+		require.True(t, hasTelegramPlugin, "operator-managed Telegram plugin entry should be refreshed")
+		assert.Equal(t, true, telegramEnabled)
+
+		matrixEnabled, hasMatrixPlugin := nestedValue(result.config, "plugins.entries.matrix.enabled")
+		require.True(t, hasMatrixPlugin, "user-managed plugin entries should be preserved")
+		assert.Equal(t, true, matrixEnabled)
+
+		_, hasBravePlugin := nestedValue(result.config, "plugins.entries.brave")
+		assert.False(t, hasBravePlugin, "non-channel plugin entries should not be re-applied in user-managed mode")
+	})
+
 	t.Run("user-managed first boot seeds agent files from configmap archive without operator skills", func(t *testing.T) {
 		if _, err := exec.LookPath("tar"); err != nil {
 			t.Skip("tar not found in PATH, skipping agent files archive test")

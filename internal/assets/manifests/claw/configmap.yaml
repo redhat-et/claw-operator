@@ -164,6 +164,16 @@ data:
       const result = {};
       if (ops.gateway) result.gateway = ops.gateway;
       if (ops.update) result.update = ops.update;
+      if (ops.channels) {
+        result.channels = ops.channels;
+        const entries = ops.plugins && ops.plugins.entries;
+        if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+          result.plugins = { entries: {} };
+          for (const channel of Object.keys(ops.channels)) {
+            if (entries[channel]) result.plugins.entries[channel] = entries[channel];
+          }
+        }
+      }
       return result;
     }
 
