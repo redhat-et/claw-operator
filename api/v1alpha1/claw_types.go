@@ -386,10 +386,11 @@ type ConfigSpec struct {
 	// +kubebuilder:default=merge
 	MergeMode ConfigMode `json:"mergeMode,omitempty"`
 
-	// Management controls ownership of openclaw.json after first boot.
+	// Management controls ownership of OpenClaw files on the PVC.
 	// "operator" (default) continues to merge operator-managed config on every
-	// pod start. "user" seeds provider/model config once, then preserves runtime
-	// edits while still enforcing gateway infrastructure and authentication.
+	// pod start and manages operator-seeded files. "user" still applies generated
+	// OpenClaw config from the CR on every pod start, but preserves non-conflicting
+	// runtime edits to OpenClaw files, skills, plugins, MCP config, and workspace files.
 	// +optional
 	// +kubebuilder:validation:Enum=operator;user
 	// +kubebuilder:default=operator

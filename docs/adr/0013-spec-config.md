@@ -81,12 +81,11 @@ The two-file model (`operator.json` + `openclaw.json` seed) is preserved.
 
 When `merge.js` runs at pod start, the final config has three layers:
 
-1. **PVC runtime state** (highest) — user changes via UI, `config.patch`,
-   or plugin installs. Preserved by `merge.js` for keys not in `operator.json`.
-   The user's runtime primary model choice wins over everything.
-2. **`operator.json`** — contains operator-managed keys (always-win tier) plus
+1. **`operator.json`** — contains operator-managed keys (always-win tier) plus
    user keys from `spec.config.raw` (append/merge/user-only tiers). Wins over
-   PVC for matching keys (except primary model).
+   PVC runtime state for matching keys.
+2. **PVC runtime state** — user changes via UI, `config.patch`, or plugin
+   installs. Preserved by `merge.js` for keys not in `operator.json`.
 3. **`openclaw.json` seed** (lowest) — first-run defaults for `agents.list` and
    `agents.defaults.workspace`. Used only when no PVC file exists yet.
 

@@ -1357,7 +1357,7 @@ EOF
 
 Controls how `operator.json` is applied to the PVC config at pod start:
 
-- **`merge`** (default) — deep-merges operator settings into the existing PVC config, preserving runtime changes (primary model choice, plugin installs, UI settings).
+- **`merge`** (default) — deep-merges generated OpenClaw config into the existing PVC config. CR/operator values win for matching keys; unrelated runtime settings are kept.
 - **`overwrite`** — fully replaces the PVC config on every pod start. Useful for clean-slate deployments.
 
 ```yaml
@@ -1370,18 +1370,25 @@ spec:
 
 ### `spec.config.management`
 
-Set `spec.config.management: user` when users should manage OpenClaw through the normal OpenClaw files and UI instead of through CR fields.
+`spec.config.management` controls ownership of the OpenClaw home on the PVC. It does not change how typed CR fields or `spec.config.raw` are rendered: both modes generate OpenClaw config from the Claw CR and apply it at pod start.
+
+Use `operator` when the Claw CR should be the main source of truth for the instance. Use `user` when users should also be able to manage OpenClaw through the normal OpenClaw CLI, UI, and files.
+
+| Mode | Best for | Runtime edits inside the pod |
+|------|----------|------------------------------|
+| `operator` (default) | GitOps or platform-managed instances where the CR owns the managed OpenClaw setup | May be overwritten by generated config and operator-managed files on restart |
+| `user` | User-owned OpenClaw homes where people can customize with the OpenClaw CLI/UI/files | Persist in `merge` mode unless they conflict with CR-generated keys |
 
 In user-managed mode, the operator:
 
-- Seeds `openclaw.json` on first boot from `spec.config.raw`, provider/model settings, and any `spec.agentFiles` source
-- Preserves runtime edits to `openclaw.json`, skills, plugins, MCP config, and workspace files on later restarts
-- Continues to enforce gateway infrastructure (`gateway.mode`, `gateway.bind`, `gateway.port`, gateway auth, and update config)
+- Applies generated OpenClaw config from the CR on every pod start
+- Preserves non-conflicting runtime edits to `openclaw.json`, skills, plugins, MCP config, and workspace files in `merge` mode
+- Lets CR-generated values win when a runtime edit touches the same config key
 - Continues to route credentials through the proxy so real secrets do not land in the gateway pod
 - Does not inject the operator's CR-management platform/Kubernetes skills, bootstrap hook, or `spec.plugins` init container
 - Seeds a user-owned deployment context skill at `skills/deployment/SKILL.md` if that file does not already exist
 
-Provider and model config from the CR is a first-boot seed in user-managed mode. This lets dashboards create a working instance with an initial provider/model, then lets users change providers and models at runtime without the operator re-adding or overwriting those choices on every restart.
+For example, if `spec.mcpServers.context7` is declared in the CR, the generated `mcp.servers.context7` entry wins in both modes. In user-managed `merge` mode, a separate MCP server added with `openclaw mcp set local ...` persists as long as it uses a different server name.
 
 ```yaml
 spec:
@@ -1508,7 +1515,7 @@ Both methods work for user-managed settings:
 |---|---|---|
 | **Persistence** | Declarative in CR — survives CR re-apply | On PVC — survives pod restarts |
 | **GitOps friendly** | Yes — part of the CR manifest | No — requires pod exec |
-| **Precedence** | Wins over PVC for matching keys (except primary model) | Wins only until next reconcile |
+| **Precedence** | Wins over PVC for matching keys | Wins only until the next pod start applies generated config |
 
 For declarative setups managed via GitOps, prefer `spec.config.raw`. For one-off tweaks inside the pod, `openclaw config patch` is fine.
 

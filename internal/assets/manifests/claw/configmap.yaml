@@ -534,20 +534,26 @@ data:
     the OpenClaw files on the PVC, including `openclaw.json`, workspace files,
     skills, plugins, MCPs, and runtime configuration.
 
+    Generated OpenClaw config from the Claw CR is still applied on pod start. If a
+    CR-generated key conflicts with a runtime edit, the CR-generated value wins. In
+    merge mode, unrelated runtime edits are preserved.
+
     ## What the user owns
 
     - OpenClaw state is stored under `/home/node/.openclaw` and persists across pod
       restarts.
     - Runtime changes made through the OpenClaw UI, CLI, or file edits should be
       treated as durable user changes.
-    - Provider and model configuration may have been seeded during first boot, but
-      later provider/model changes are user-owned and should be made through normal
-      OpenClaw config workflows.
+    - Runtime changes that do not conflict with CR-generated config are user-owned
+      and should be made through normal OpenClaw config workflows.
 
     ## What the operator still owns
 
+    - Generated OpenClaw config from the Claw CR is applied to `openclaw.json` on
+      pod start. Do not tell the user to edit CR-owned keys directly in
+      `openclaw.json`; the CR will win.
     - Gateway bind address, port, auth, and update settings are managed by the
-      operator. Do not tell the user to change these in `openclaw.json`.
+      operator.
     - Real credentials are not stored in this gateway container. Network requests go
       through a credential-injecting proxy that replaces placeholder credentials with
       real secrets.
