@@ -377,6 +377,90 @@ func TestSpecConfigRawIntegration(t *testing.T) {
 			"user-only session key should pass through")
 	})
 
+	t.Run("raw MCP servers pass through when no typed MCP servers are declared", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: testCredentials(),
+				Config: &clawv1alpha1.ConfigSpec{
+					Raw: &clawv1alpha1.RawConfig{
+						RawExtension: runtime.RawExtension{
+							Raw: []byte(`{
+								"mcp": {
+									"servers": {
+										"local": {"url": "http://local-mcp:8080/mcp"}
+									}
+								}
+							}`),
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		config := getReconciled(t, ctx)
+		mcpURL, hasMcpURL := nestedValue(config, "mcp.servers.local.url")
+		require.True(t, hasMcpURL, "raw mcp.servers entry should pass through")
+		assert.Equal(t, "http://local-mcp:8080/mcp", mcpURL)
+	})
+
+	t.Run("typed MCP servers override raw MCP servers", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: testCredentials(),
+				McpServers: map[string]clawv1alpha1.McpServerSpec{
+					"context7": {
+						URL:       "https://mcp.context7.com/mcp",
+						Transport: clawv1alpha1.McpTransportStreamableHTTP,
+					},
+				},
+				Config: &clawv1alpha1.ConfigSpec{
+					Raw: &clawv1alpha1.RawConfig{
+						RawExtension: runtime.RawExtension{
+							Raw: []byte(`{
+								"mcp": {
+									"servers": {
+										"context7": {"url": "https://stale.example.test/mcp"},
+										"legacy": {"url": "https://legacy.example.test/mcp"}
+									}
+								}
+							}`),
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		config := getReconciled(t, ctx)
+		mcpURL, hasMcpURL := nestedValue(config, "mcp.servers.context7.url")
+		require.True(t, hasMcpURL, "typed spec.mcpServers entry should be present")
+		assert.Equal(t, "https://mcp.context7.com/mcp", mcpURL)
+		transport, hasTransport := nestedValue(config, "mcp.servers.context7.transport")
+		require.True(t, hasTransport, "typed spec.mcpServers transport should be present")
+		assert.Equal(t, "streamable-http", transport)
+		_, hasLegacy := nestedValue(config, "mcp.servers.legacy")
+		assert.False(t, hasLegacy, "typed spec.mcpServers should own mcp.servers")
+	})
+
 	t.Run("always-win keys override user config", func(t *testing.T) {
 		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
 

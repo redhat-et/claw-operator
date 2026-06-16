@@ -264,9 +264,27 @@ func TestMergeJS(t *testing.T) {
 		assert.Contains(t, result.stdout, "merged operator.json into existing openclaw.json")
 	})
 
-	t.Run("user-managed restart preserves runtime provider and model edits", func(t *testing.T) {
+	t.Run("user-managed restart applies full operator config in merge mode", func(t *testing.T) {
 		operatorJSON := `{
 			"gateway": { "mode": "local", "bind": "lan", "port": 18789, "auth": { "mode": "token" } },
+			"channels": {
+				"telegram": {
+					"enabled": true,
+					"botToken": "placeholder",
+					"dmPolicy": "allowlist",
+					"allowFrom": [8327942761]
+				}
+			},
+			"mcp": { "servers": { "context7": { "url": "https://mcp.context7.com/mcp", "transport": "streamable-http" } } },
+			"tools": { "web": { "search": { "enabled": true, "provider": "brave" }, "fetch": { "enabled": true } } },
+			"plugins": {
+				"entries": {
+					"telegram": { "enabled": true },
+					"brave": { "config": { "webSearch": { "apiKey": "placeholder" } } }
+				}
+			},
+			"diagnostics": { "otel": { "metrics": true, "metricsEndpoint": "http://localhost:4318" } },
+			"logging": { "level": "debug" },
 			"models": {
 				"providers": {
 					"google": { "baseUrl": "https://generativelanguage.googleapis.com/v1beta", "apiKey": "placeholder" }
@@ -281,6 +299,19 @@ func TestMergeJS(t *testing.T) {
 		}`
 		pvcJSON := `{
 			"gateway": { "mode": "local", "bind": "localhost", "port": 9999 },
+			"channels": {
+				"matrix": { "enabled": true },
+				"telegram": { "enabled": false, "dmPolicy": "open", "allowFrom": ["*"] }
+			},
+			"mcp": { "servers": { "old": { "url": "https://old.example.test/mcp" } } },
+			"tools": { "web": { "search": { "enabled": false, "provider": "duckduckgo" } } },
+			"plugins": {
+				"entries": {
+					"matrix": { "enabled": true },
+					"telegram": { "enabled": false }
+				}
+			},
+			"diagnostics": { "otel": { "enabled": true, "endpoint": "http://langfuse:3000/otel", "traces": true } },
 			"models": {
 				"providers": {
 					"custom": { "baseUrl": "https://models.example.test/v1", "apiKey": "runtime" }
@@ -291,7 +322,8 @@ func TestMergeJS(t *testing.T) {
 					"model": { "primary": "custom/runtime-model" },
 					"models": { "custom/runtime-model": { "alias": "Runtime Model" } }
 				}
-			}
+			},
+			"session": { "retentionDays": 30 }
 		}`
 
 		result := runMergeJS(t, mergeTestSetup{
@@ -306,20 +338,58 @@ func TestMergeJS(t *testing.T) {
 		require.True(t, hasGatewayPort, "gateway.port should be refreshed from operator infrastructure")
 		assert.Equal(t, float64(18789), gatewayPort)
 
-		_, hasGoogle := nestedValue(result.config, "models.providers.google")
-		assert.False(t, hasGoogle, "operator provider seed should not be re-applied after user-managed first boot")
+		googleBaseURL, hasGoogle := nestedValue(result.config, "models.providers.google.baseUrl")
+		require.True(t, hasGoogle, "operator provider config should be applied")
+		assert.Equal(t, "https://generativelanguage.googleapis.com/v1beta", googleBaseURL)
 
 		customBaseURL, hasCustom := nestedValue(result.config, "models.providers.custom.baseUrl")
-		require.True(t, hasCustom, "runtime provider edits should be preserved")
+		require.True(t, hasCustom, "merge mode should preserve unrelated runtime provider entries")
 		assert.Equal(t, "https://models.example.test/v1", customBaseURL)
 
 		primary, hasPrimary := nestedValue(result.config, "agents.defaults.model.primary")
-		require.True(t, hasPrimary, "runtime model selection should be preserved")
-		assert.Equal(t, "custom/runtime-model", primary)
-		assert.Contains(t, result.stdout, "preserved user openclaw.json")
+		require.True(t, hasPrimary, "operator model selection should be applied")
+		assert.Equal(t, "google/gemini-3.5-flash", primary)
+
+		dmPolicy, hasDMPolicy := nestedValue(result.config, "channels.telegram.dmPolicy")
+		require.True(t, hasDMPolicy, "operator-managed Telegram channel should be refreshed")
+		assert.Equal(t, "allowlist", dmPolicy)
+
+		matrixEnabled, hasMatrixPlugin := nestedValue(result.config, "plugins.entries.matrix.enabled")
+		require.True(t, hasMatrixPlugin, "merge mode should preserve unrelated user plugin entries")
+		assert.Equal(t, true, matrixEnabled)
+
+		searchProvider, hasSearchProvider := nestedValue(result.config, "tools.web.search.provider")
+		require.True(t, hasSearchProvider, "operator-managed web search should be refreshed")
+		assert.Equal(t, "brave", searchProvider)
+
+		braveKey, hasBraveKey := nestedValue(result.config, "plugins.entries.brave.config.webSearch.apiKey")
+		require.True(t, hasBraveKey, "operator-managed web search plugin config should be refreshed")
+		assert.Equal(t, "placeholder", braveKey)
+
+		mcpURL, hasMcpURL := nestedValue(result.config, "mcp.servers.context7.url")
+		require.True(t, hasMcpURL, "operator-managed MCP servers should be applied")
+		assert.Equal(t, "https://mcp.context7.com/mcp", mcpURL)
+
+		metricsEndpoint, hasMetricsEndpoint := nestedValue(result.config, "diagnostics.otel.metricsEndpoint")
+		require.True(t, hasMetricsEndpoint, "operator-managed metrics endpoint should be applied")
+		assert.Equal(t, "http://localhost:4318", metricsEndpoint)
+
+		traceEndpoint, hasTraceEndpoint := nestedValue(result.config, "diagnostics.otel.endpoint")
+		require.True(t, hasTraceEndpoint, "merge mode should preserve user tracing config")
+		assert.Equal(t, "http://langfuse:3000/otel", traceEndpoint)
+
+		logLevel, hasLogLevel := nestedValue(result.config, "logging.level")
+		require.True(t, hasLogLevel, "operator config from spec.config.raw should be applied")
+		assert.Equal(t, "debug", logLevel)
+
+		retentionDays, hasRetentionDays := nestedValue(result.config, "session.retentionDays")
+		require.True(t, hasRetentionDays, "merge mode should preserve unrelated runtime config")
+		assert.Equal(t, float64(30), retentionDays)
+
+		assert.Contains(t, result.stdout, "applied operator config to user-managed openclaw.json (mode=merge)")
 	})
 
-	t.Run("user-managed restart refreshes operator-managed channels", func(t *testing.T) {
+	t.Run("user-managed restart replaces config in overwrite mode", func(t *testing.T) {
 		operatorJSON := `{
 			"gateway": { "mode": "local", "bind": "lan", "port": 18789, "auth": { "mode": "token" } },
 			"channels": {
@@ -330,13 +400,19 @@ func TestMergeJS(t *testing.T) {
 					"allowFrom": [8327942761]
 				}
 			},
+			"mcp": { "servers": { "context7": { "url": "https://mcp.context7.com/mcp", "transport": "streamable-http" } } },
+			"models": {
+				"providers": {
+					"google": { "baseUrl": "https://generativelanguage.googleapis.com/v1beta", "apiKey": "placeholder" }
+				}
+			},
 			"plugins": {
 				"entries": {
-					"telegram": { "enabled": true },
-					"brave": { "enabled": true }
+					"telegram": { "enabled": true }
 				}
 			}
 		}`
+		seedJSON := `{"agents":{"defaults":{"workspace":"~/.openclaw/workspace"}}}`
 		pvcJSON := `{
 			"channels": {
 				"matrix": { "enabled": true },
@@ -351,12 +427,16 @@ func TestMergeJS(t *testing.T) {
 					"matrix": { "enabled": true },
 					"telegram": { "enabled": false }
 				}
-			}
+			},
+			"models": { "providers": { "custom": { "baseUrl": "https://models.example.test/v1" } } },
+			"session": { "retentionDays": 30 }
 		}`
 
 		result := runMergeJS(t, mergeTestSetup{
 			operatorJSON: operatorJSON,
+			seedJSON:     seedJSON,
 			pvcJSON:      pvcJSON,
+			configMode:   "overwrite",
 			extraEnv: map[string]string{
 				"CLAW_CONFIG_MANAGEMENT": "user",
 			},
@@ -374,12 +454,21 @@ func TestMergeJS(t *testing.T) {
 		require.True(t, hasTelegramPlugin, "operator-managed Telegram plugin entry should be refreshed")
 		assert.Equal(t, true, telegramEnabled)
 
-		matrixEnabled, hasMatrixPlugin := nestedValue(result.config, "plugins.entries.matrix.enabled")
-		require.True(t, hasMatrixPlugin, "user-managed plugin entries should be preserved")
-		assert.Equal(t, true, matrixEnabled)
+		_, hasMatrixPlugin := nestedValue(result.config, "plugins.entries.matrix")
+		assert.False(t, hasMatrixPlugin, "overwrite mode should remove stale runtime plugin entries")
 
-		_, hasBravePlugin := nestedValue(result.config, "plugins.entries.brave")
-		assert.False(t, hasBravePlugin, "non-channel plugin entries should not be re-applied in user-managed mode")
+		_, hasMatrixChannel := nestedValue(result.config, "channels.matrix")
+		assert.False(t, hasMatrixChannel, "overwrite mode should remove stale runtime channel entries")
+
+		_, hasCustomProvider := nestedValue(result.config, "models.providers.custom")
+		assert.False(t, hasCustomProvider, "overwrite mode should remove stale runtime provider entries")
+
+		_, hasSession := nestedValue(result.config, "session")
+		assert.False(t, hasSession, "overwrite mode should remove stale runtime-only config")
+
+		mcpURL, hasMcpURL := nestedValue(result.config, "mcp.servers.context7.url")
+		require.True(t, hasMcpURL, "overwrite mode should apply operator MCP config")
+		assert.Equal(t, "https://mcp.context7.com/mcp", mcpURL)
 	})
 
 	t.Run("user-managed first boot seeds agent files from configmap archive without operator skills", func(t *testing.T) {

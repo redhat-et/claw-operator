@@ -160,23 +160,6 @@ data:
       if (stat.isFile()) copyFileWithPolicy(src, dest);
     }
 
-    function managedInfrastructureConfig(ops) {
-      const result = {};
-      if (ops.gateway) result.gateway = ops.gateway;
-      if (ops.update) result.update = ops.update;
-      if (ops.channels) {
-        result.channels = ops.channels;
-        const entries = ops.plugins && ops.plugins.entries;
-        if (entries && typeof entries === "object" && !Array.isArray(entries)) {
-          result.plugins = { entries: {} };
-          for (const channel of Object.keys(ops.channels)) {
-            if (entries[channel]) result.plugins.entries[channel] = entries[channel];
-          }
-        }
-      }
-      return result;
-    }
-
     function prepareAgentFilesSource() {
       const source = process.env.AGENT_FILES_SOURCE || "";
       if (!source) return "";
@@ -270,9 +253,9 @@ data:
 
     if (management === "user" && fs.existsSync(pvcPath)) {
       let base = JSON.parse(fs.readFileSync(pvcPath, "utf8"));
-      const merged = deepMerge(base, managedInfrastructureConfig(ops));
+      const merged = mode === "overwrite" ? mergeConfigs(seedConfig, ops) : mergeConfigs(base, ops);
       fs.writeFileSync(pvcPath, JSON.stringify(merged, null, 2), { mode: 0o600 });
-      console.log("[init-config] preserved user openclaw.json and refreshed gateway infrastructure");
+      console.log(`[init-config] applied operator config to user-managed openclaw.json (mode=${mode})`);
     } else if (mode === "merge" && fs.existsSync(pvcPath)) {
       let base = seed;
       try {
@@ -1437,8 +1420,8 @@ data:
     ## `mergeMode`
 
     Controls how `operator.json` is applied to the PVC at pod start:
-    - `merge` (default) — deep-merge into existing PVC config, preserving runtime
-      changes (primary model choice, plugin installs, UI settings)
+    - `merge` (default) — deep-merge operator config into the existing PVC config.
+      Operator/CR values win for matching keys; unrelated runtime settings are kept.
     - `overwrite` — fully replace PVC config on every pod start (clean slate)
 
     ## `spec.config.raw` vs `openclaw config patch`
@@ -1450,7 +1433,7 @@ data:
     | **Persistence** | Declarative in CR — survives CR re-apply | On PVC — survives pod restarts |
     | **GitOps friendly** | Yes — part of the CR manifest | No — requires pod exec |
     | **Scope** | Any `openclaw.json` key | Any `openclaw.json` key |
-    | **Precedence** | Wins over PVC for matching keys (except primary model) | Wins only until next reconcile overwrite |
+    | **Precedence** | Wins over PVC for matching keys | Wins only until the next pod start applies operator config |
 
     For one-off tweaks, `openclaw config patch` is fine. For declarative setups
     managed via GitOps, `spec.config.raw` is preferred.
