@@ -879,6 +879,17 @@ spec:
                       Default: true (plugins are allowed).
                     type: boolean
                 type: object
+              selfUpdate:
+                description: |-
+                  SelfUpdate configures per-instance RBAC for the gateway pod to
+                  read and modify its own Claw CR spec. Disabled by default.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled activates self-update RBAC and mounts the
+                      ServiceAccount token.
+                    type: boolean
+                type: object
               skills:
                 additionalProperties:
                   type: string

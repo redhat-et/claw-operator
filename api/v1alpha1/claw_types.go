@@ -565,6 +565,16 @@ type NetworkSpec struct {
 	BuiltinPassthroughs *[]string `json:"builtinPassthroughs,omitempty"`
 }
 
+// SelfUpdateSpec configures per-instance RBAC that allows the gateway pod
+// to read and modify its own Claw CR spec. When enabled, the operator creates
+// a dedicated ServiceAccount, Role (scoped via resourceNames), and RoleBinding.
+type SelfUpdateSpec struct {
+	// Enabled activates self-update RBAC and mounts the ServiceAccount token.
+	// +optional
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+}
+
 // CustomProviderAPI selects the wire format for a custom provider.
 // +kubebuilder:validation:Enum=openai-completions;openai-responses;anthropic-messages;ollama
 type CustomProviderAPI string
@@ -692,6 +702,11 @@ type ClawSpec struct {
 	// (operator-managed).
 	// +optional
 	Skills map[string]string `json:"skills,omitempty"`
+
+	// SelfUpdate configures per-instance RBAC for the gateway pod to
+	// read and modify its own Claw CR spec. Disabled by default.
+	// +optional
+	SelfUpdate *SelfUpdateSpec `json:"selfUpdate,omitempty"`
 
 	// Restrictions configures runtime restrictions that limit agent and
 	// user capabilities. Use for regulated environments where behavioral

@@ -148,6 +148,7 @@ func deleteAndWaitAllResources(t *testing.T, namespace string, instanceNames ...
 		{&appsv1.Deployment{}, client.ObjectKey{Name: getClawDeploymentName(instanceName), Namespace: namespace}},
 		{&corev1.Service{}, client.ObjectKey{Name: getProxyServiceName(instanceName), Namespace: namespace}},
 		{&appsv1.Deployment{}, client.ObjectKey{Name: getProxyDeploymentName(instanceName), Namespace: namespace}},
+		{&corev1.ServiceAccount{}, client.ObjectKey{Name: getSelfUpdateServiceAccountName(instanceName), Namespace: namespace}},
 	}
 
 	for _, r := range resources {

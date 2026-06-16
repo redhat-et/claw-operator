@@ -527,6 +527,10 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	if err := r.reconcileSelfUpdate(ctx, instance); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile self-update RBAC: %w", err)
+	}
+
 	// Build kustomized objects
 	objects, err := r.buildKustomizedObjects(instance)
 	if err != nil {
@@ -909,6 +913,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	}
 	if err := configureGatewayNoProxy(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure gateway NO_PROXY: %w", err)
+	}
+	if err := configureClawDeploymentForSelfUpdate(objects, instance); err != nil {
+		return fmt.Errorf("failed to configure self-update on gateway deployment: %w", err)
 	}
 	if err := configureImagePullPolicy(objects, r.ImagePullPolicy); err != nil {
 		return fmt.Errorf("failed to configure image pull policy: %w", err)
