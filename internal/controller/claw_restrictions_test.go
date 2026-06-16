@@ -218,6 +218,11 @@ func TestValidateReadOnlyPaths(t *testing.T) {
 	t.Run("rejects bare slash", func(t *testing.T) {
 		assert.Error(t, validateReadOnlyPaths([]string{"/"}))
 	})
+
+	t.Run("rejects directory marker on file-like path", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{"SOUL.md/"}))
+		assert.Error(t, validateReadOnlyPaths([]string{"skills/hr-policy/SKILL.md/**"}))
+	})
 }
 
 func TestSortedPersonaKeys(t *testing.T) {

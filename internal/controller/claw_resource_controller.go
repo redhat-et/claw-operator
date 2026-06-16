@@ -557,8 +557,19 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, err
 	}
-	if len(personaKeys) == 0 {
+	hasReadOnly := instance.Spec.AgentFiles != nil && len(instance.Spec.AgentFiles.ReadOnly) > 0
+	if len(personaKeys) == 0 && !hasReadOnly {
 		meta.RemoveStatusCondition(&instance.Status.Conditions, clawv1alpha1.ConditionTypeRestrictionsEnforced)
+	}
+	if hasReadOnly {
+		readOnlyMsg := fmt.Sprintf("read-only files active: %s",
+			strings.Join(instance.Spec.AgentFiles.ReadOnly, ", "))
+		if len(personaKeys) > 0 {
+			readOnlyMsg += fmt.Sprintf("; persona guard active: %s",
+				strings.Join(personaKeys, ", "))
+		}
+		setCondition(instance, clawv1alpha1.ConditionTypeRestrictionsEnforced,
+			metav1.ConditionTrue, clawv1alpha1.ConditionReasonConfigured, readOnlyMsg)
 	}
 
 	// Apply deployment overrides (proxy image, pull policy, credentials)

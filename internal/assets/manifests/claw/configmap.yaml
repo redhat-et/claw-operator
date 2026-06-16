@@ -260,6 +260,7 @@ data:
       if (!readOnlyStr) return;
       const entries = readOnlyStr.split(",").filter(Boolean);
       const protectedDir = "/protected-files";
+      const missing = [];
 
       for (const entry of entries) {
         const isDir = entry.endsWith("/") || entry.endsWith("/**");
@@ -268,7 +269,7 @@ data:
         const dest = path.join(protectedDir, "workspace", clean);
 
         if (!fs.existsSync(src)) {
-          console.warn("[init-config] readOnly path not found: " + clean);
+          missing.push(clean);
           continue;
         }
 
@@ -277,6 +278,12 @@ data:
         } else if (fs.statSync(src).isFile()) {
           copyAlways(src, dest);
         }
+      }
+      if (missing.length > 0) {
+        throw new Error(
+          "[init-config] readOnly paths not found in workspace: " + missing.join(", ") +
+          ". Check spec.agentFiles.readOnly for typos."
+        );
       }
       console.log("[init-config] protected " + entries.length + " read-only entries");
     }

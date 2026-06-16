@@ -152,6 +152,7 @@ func validateReadOnlyPaths(paths []string) error {
 			return fmt.Errorf("readOnly path %q must be relative, not absolute", p)
 		}
 
+		isDirPattern := strings.HasSuffix(p, "/") || strings.HasSuffix(p, "/**")
 		clean := strings.TrimSuffix(strings.TrimSuffix(p, "/**"), "/")
 		if clean == "" {
 			return fmt.Errorf("readOnly path %q resolves to empty after trimming", p)
@@ -164,6 +165,11 @@ func validateReadOnlyPaths(paths []string) error {
 		}
 		if filepath.Clean(clean) != clean {
 			return fmt.Errorf("readOnly path %q is not a clean path", p)
+		}
+		if isDirPattern && filepath.Ext(clean) != "" {
+			return fmt.Errorf(
+				"readOnly path %q looks like a file but has a directory marker; remove the trailing / or /**", p,
+			)
 		}
 	}
 	return nil
