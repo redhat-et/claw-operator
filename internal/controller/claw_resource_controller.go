@@ -516,6 +516,8 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			logger.Error(err, "readOnly path validation failed")
 			setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 				clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+			setCondition(instance, clawv1alpha1.ConditionTypeRestrictionsEnforced,
+				metav1.ConditionFalse, clawv1alpha1.ConditionReasonValidationFailed, err.Error())
 			if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
 				logger.Error(statusErr, "Failed to update status after readOnly validation failure")
 			}
@@ -561,15 +563,19 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if len(personaKeys) == 0 && !hasReadOnly {
 		meta.RemoveStatusCondition(&instance.Status.Conditions, clawv1alpha1.ConditionTypeRestrictionsEnforced)
 	}
-	if hasReadOnly {
-		readOnlyMsg := fmt.Sprintf("read-only files active: %s",
-			strings.Join(instance.Spec.AgentFiles.ReadOnly, ", "))
+	if len(personaKeys) > 0 || hasReadOnly {
+		var parts []string
+		if hasReadOnly {
+			parts = append(parts, fmt.Sprintf("read-only files active: %s",
+				strings.Join(instance.Spec.AgentFiles.ReadOnly, ", ")))
+		}
 		if len(personaKeys) > 0 {
-			readOnlyMsg += fmt.Sprintf("; persona guard active: %s",
-				strings.Join(personaKeys, ", "))
+			parts = append(parts, fmt.Sprintf("persona guard active: %s",
+				strings.Join(personaKeys, ", ")))
 		}
 		setCondition(instance, clawv1alpha1.ConditionTypeRestrictionsEnforced,
-			metav1.ConditionTrue, clawv1alpha1.ConditionReasonConfigured, readOnlyMsg)
+			metav1.ConditionTrue, clawv1alpha1.ConditionReasonConfigured,
+			strings.Join(parts, "; "))
 	}
 
 	// Apply deployment overrides (proxy image, pull policy, credentials)

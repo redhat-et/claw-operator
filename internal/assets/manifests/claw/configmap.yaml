@@ -247,7 +247,9 @@ data:
       for (const entry of fs.readdirSync(src)) {
         const s = path.join(src, entry);
         const d = path.join(dest, entry);
-        if (fs.statSync(s).isDirectory()) {
+        const stat = fs.lstatSync(s);
+        if (stat.isSymbolicLink()) continue;
+        if (stat.isDirectory()) {
           copyTreeAlways(s, d);
         } else {
           copyAlways(s, d);
@@ -273,9 +275,11 @@ data:
           continue;
         }
 
-        if (isDir && fs.statSync(src).isDirectory()) {
+        const stat = fs.lstatSync(src);
+        if (stat.isSymbolicLink()) continue;
+        if (isDir && stat.isDirectory()) {
           copyTreeAlways(src, dest);
-        } else if (fs.statSync(src).isFile()) {
+        } else if (stat.isFile()) {
           copyAlways(src, dest);
         }
       }

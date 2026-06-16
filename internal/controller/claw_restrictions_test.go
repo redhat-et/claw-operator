@@ -219,6 +219,10 @@ func TestValidateReadOnlyPaths(t *testing.T) {
 		assert.Error(t, validateReadOnlyPaths([]string{"/"}))
 	})
 
+	t.Run("rejects commas in paths", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{"file,name.md"}))
+	})
+
 	t.Run("rejects directory marker on file-like path", func(t *testing.T) {
 		assert.Error(t, validateReadOnlyPaths([]string{"SOUL.md/"}))
 		assert.Error(t, validateReadOnlyPaths([]string{"skills/hr-policy/SKILL.md/**"}))

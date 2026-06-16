@@ -163,6 +163,9 @@ func validateReadOnlyPaths(paths []string) error {
 		if strings.ContainsAny(clean, "*?[") {
 			return fmt.Errorf("readOnly path %q contains unsupported glob characters", p)
 		}
+		if strings.Contains(clean, ",") {
+			return fmt.Errorf("readOnly path %q must not contain commas", p)
+		}
 		if filepath.Clean(clean) != clean {
 			return fmt.Errorf("readOnly path %q is not a clean path", p)
 		}
