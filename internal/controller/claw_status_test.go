@@ -1320,6 +1320,17 @@ func TestVersionDowngradeDetection(t *testing.T) {
 		assert.Equal(t, metav1.ConditionTrue, condition.Status)
 		assert.Contains(t, condition.Message, "2026.6.5")
 		assert.Contains(t, condition.Message, "2026.6.8")
+
+		// Condition must persist across subsequent reconciles (LastDeployedVersion
+		// is a high-water mark and should not be overwritten by the downgraded version)
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+		require.NoError(t, k8sClient.Get(ctx,
+			client.ObjectKey{Name: testInstanceName, Namespace: namespace}, updated))
+		condition = meta.FindStatusCondition(updated.Status.Conditions,
+			clawv1alpha1.ConditionTypeVersionDowngrade)
+		require.NotNil(t, condition, "VersionDowngrade condition should persist across reconciles")
+		assert.Equal(t, "2026.6.8", updated.Status.LastDeployedVersion,
+			"LastDeployedVersion should not be overwritten by a downgraded version")
 	})
 
 	t.Run("should clear VersionDowngrade condition on upgrade", func(t *testing.T) {

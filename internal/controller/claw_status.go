@@ -365,9 +365,13 @@ func (r *ClawResourceReconciler) updateStatus(ctx context.Context, instance *cla
 			clawv1alpha1.ConditionTypeVersionDowngrade)
 	}
 
-	// Track last deployed version when ready
+	// Track last deployed version when ready (high-water mark: only update upward
+	// so that a downgrade preserves the previous version for comparison)
 	if ready && instance.Spec.Version != "" {
-		instance.Status.LastDeployedVersion = instance.Spec.Version
+		cmpTrack, cmpTrackOK := compareCalver(instance.Spec.Version, instance.Status.LastDeployedVersion)
+		if instance.Status.LastDeployedVersion == "" || !cmpTrackOK || cmpTrack >= 0 {
+			instance.Status.LastDeployedVersion = instance.Spec.Version
+		}
 	}
 
 	recordClawMetrics(instance)

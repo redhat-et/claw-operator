@@ -260,7 +260,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		)
 		pluginInit := initContainers[3].(map[string]any)
 		volumeMounts := pluginInit["volumeMounts"].([]any)
-		require.Len(t, volumeMounts, 5)
+		require.Len(t, volumeMounts, 3)
 
 		mountPaths := make(map[string]string)
 		for _, vm := range volumeMounts {
@@ -268,9 +268,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 			mountPaths[m["mountPath"].(string)] = m["name"].(string)
 		}
 
-		assert.Equal(t, "claw-home", mountPaths["/home/node/.openclaw"])
-		assert.Equal(t, "claw-home", mountPaths["/home/node/.local"])
-		assert.Equal(t, "claw-home", mountPaths["/home/node/.cache"])
+		assert.Equal(t, "claw-home", mountPaths["/home/node"])
 		assert.Equal(t, "proxy-ca", mountPaths["/etc/proxy-ca"])
 		assert.Equal(t, "tmp-volume", mountPaths["/tmp"])
 	})
@@ -639,7 +637,7 @@ func TestPluginsIntegration(t *testing.T) {
 				for _, vm := range ic.VolumeMounts {
 					mountPaths[vm.MountPath] = vm.Name
 				}
-				assert.Equal(t, "claw-home", mountPaths["/home/node/.openclaw"])
+				assert.Equal(t, "claw-home", mountPaths["/home/node"])
 				assert.Equal(t, "proxy-ca", mountPaths["/etc/proxy-ca"])
 				assert.Equal(t, "tmp-volume", mountPaths["/tmp"])
 				break
