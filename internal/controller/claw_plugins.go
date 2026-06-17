@@ -90,6 +90,37 @@ func requiredProviderPlugins(instance *clawv1alpha1.Claw) []string {
 	return plugins
 }
 
+// injectProviderPlugins adds plugins.entries declarations for any provider
+// plugins that need to be loaded by the gateway at runtime. Installing a
+// plugin to disk (via init-plugins) is not enough; the gateway only loads
+// extension plugins that are declared in plugins.entries.
+func injectProviderPlugins(config map[string]any, instance *clawv1alpha1.Claw) {
+	var ids []string
+	seen := make(map[string]bool)
+	for _, cred := range instance.Spec.Credentials {
+		if !usesVertexSDK(cred) {
+			continue
+		}
+		defaults, ok := knownProviders[cred.Provider]
+		if !ok || defaults.VertexPluginID == "" {
+			continue
+		}
+		if !seen[defaults.VertexPluginID] {
+			ids = append(ids, defaults.VertexPluginID)
+			seen[defaults.VertexPluginID] = true
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	existingEntries := ensureNestedMap(ensureNestedMap(config, "plugins"), "entries")
+	for _, id := range ids {
+		if _, exists := existingEntries[id]; !exists {
+			existingEntries[id] = map[string]any{"enabled": true}
+		}
+	}
+}
+
 func generatePluginInstallScript(plugins []string) string {
 	var b strings.Builder
 	b.WriteString(`set -e
@@ -194,18 +225,8 @@ func configurePluginsInitContainer(
 			"volumeMounts": []any{
 				map[string]any{
 					"name":      "claw-home",
-					"mountPath": "/home/node/.openclaw",
+					"mountPath": "/home/node",
 					"subPath":   "home",
-				},
-				map[string]any{
-					"name":      "claw-home",
-					"mountPath": "/home/node/.local",
-					"subPath":   "home/.local",
-				},
-				map[string]any{
-					"name":      "claw-home",
-					"mountPath": "/home/node/.cache",
-					"subPath":   "home/.cache",
 				},
 				map[string]any{
 					"name":      "proxy-ca",

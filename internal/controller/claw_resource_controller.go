@@ -799,6 +799,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	if err := injectProviders(config, instance); err != nil {
 		return fmt.Errorf("failed to inject providers: %w", err)
 	}
+	injectProviderPlugins(config, instance)
 	injectModelCatalog(config, instance)
 	injectMemorySearch(config, instance)
 	if err := injectChannels(config, instance); err != nil {
