@@ -377,14 +377,37 @@ func TestInjectTelemetryEgressRules(t *testing.T) {
 		assert.Len(t, egress, 2)
 	})
 
-	t.Run("noop for in-cluster endpoint", func(t *testing.T) {
+	t.Run("adds in-cluster egress rule with namespace selector", func(t *testing.T) {
 		objects := makeEgressNP()
 		instance := testClawWithTraces("http://collector.observability.svc:4318", "")
 
 		require.NoError(t, injectTelemetryEgressRules(objects, instance))
 
 		egress, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "egress")
-		assert.Len(t, egress, 1)
+		assert.Len(t, egress, 2)
+
+		rule := egress[1].(map[string]any)
+		to := rule["to"].([]any)
+		require.Len(t, to, 1)
+		nsSel := to[0].(map[string]any)["namespaceSelector"].(map[string]any)
+		labels := nsSel["matchLabels"].(map[string]any)
+		assert.Equal(t, "observability", labels["kubernetes.io/metadata.name"])
+	})
+
+	t.Run("adds in-cluster same-namespace egress rule with pod selector", func(t *testing.T) {
+		objects := makeEgressNP()
+		instance := testClawWithTraces("http://collector:4318", "")
+
+		require.NoError(t, injectTelemetryEgressRules(objects, instance))
+
+		egress, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "egress")
+		assert.Len(t, egress, 2)
+
+		rule := egress[1].(map[string]any)
+		to := rule["to"].([]any)
+		require.Len(t, to, 1)
+		_, hasPodSel := to[0].(map[string]any)["podSelector"]
+		assert.True(t, hasPodSel)
 	})
 
 	t.Run("noop when no endpoints", func(t *testing.T) {
@@ -411,7 +434,21 @@ func TestInjectTelemetryEgressRules(t *testing.T) {
 		assert.Len(t, egress, 2)
 	})
 
-	t.Run("adds separate rules for different endpoints", func(t *testing.T) {
+	t.Run("adds separate rules for different endpoint types", func(t *testing.T) {
+		objects := makeEgressNP()
+		instance := testClawWithTraces("http://traces.example.com:4318", "")
+		instance.Spec.Logs = &clawv1alpha1.LogsSpec{
+			Enabled:  true,
+			Endpoint: "http://collector.observability.svc:4318",
+		}
+
+		require.NoError(t, injectTelemetryEgressRules(objects, instance))
+
+		egress, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "egress")
+		assert.Len(t, egress, 3, "expected base + external + in-cluster rules")
+	})
+
+	t.Run("deduplicates external endpoints on same port", func(t *testing.T) {
 		objects := makeEgressNP()
 		instance := testClawWithTraces("http://traces.example.com:4318", "")
 		instance.Spec.Logs = &clawv1alpha1.LogsSpec{
@@ -422,7 +459,7 @@ func TestInjectTelemetryEgressRules(t *testing.T) {
 		require.NoError(t, injectTelemetryEgressRules(objects, instance))
 
 		egress, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "egress")
-		assert.Len(t, egress, 3)
+		assert.Len(t, egress, 2, "same-port external endpoints should dedup to one rule")
 	})
 }
 

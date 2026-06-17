@@ -18,7 +18,6 @@ package controller
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -203,13 +202,15 @@ func setOrAppendEnvDownwardAPI(envVars []any, name, fieldPath string) []any {
 }
 
 // injectTelemetryEgressRules adds egress rules to the gateway NetworkPolicy
-// for external traces/logs collector endpoints.
+// for traces/logs collector endpoints. External endpoints get port-only rules;
+// in-cluster endpoints get podSelector/namespaceSelector rules (same pattern
+// as injectMcpGatewayEgressRules).
 func injectTelemetryEgressRules(
 	objects []*unstructured.Unstructured,
 	instance *clawv1alpha1.Claw,
 ) error {
-	endpoints := collectTelemetryEndpoints(instance)
-	if len(endpoints) == 0 {
+	targets := classifyTelemetryEndpoints(instance)
+	if len(targets) == 0 {
 		return nil
 	}
 
@@ -224,25 +225,19 @@ func injectTelemetryEgressRules(
 			return fmt.Errorf("failed to get egress from NetworkPolicy: %w", err)
 		}
 
-		for _, ep := range endpoints {
-			parsed, err := url.Parse(ep)
-			if err != nil {
-				continue
-			}
-			port, err := resolvePort(parsed)
-			if err != nil {
-				continue
-			}
-
-			rule := map[string]any{
-				"ports": []any{
-					map[string]any{
-						"port":     int64(port),
-						"protocol": "TCP",
+		for _, t := range targets {
+			if t.External {
+				egress = append(egress, map[string]any{
+					"ports": []any{
+						map[string]any{
+							"port":     int64(t.Port),
+							"protocol": "TCP",
+						},
 					},
-				},
+				})
+			} else {
+				egress = append(egress, buildInClusterEgressRule(t))
 			}
-			egress = append(egress, rule)
 		}
 
 		return unstructured.SetNestedSlice(obj.Object, egress, "spec", "egress")
@@ -250,35 +245,27 @@ func injectTelemetryEgressRules(
 	return fmt.Errorf("NetworkPolicy %q not found in manifests", npName)
 }
 
-func collectTelemetryEndpoints(instance *clawv1alpha1.Claw) []string {
+func classifyTelemetryEndpoints(instance *clawv1alpha1.Claw) []egressTarget {
 	seen := make(map[string]bool)
-	var endpoints []string
+	var targets []egressTarget
 
-	tEp := tracesEndpoint(instance)
-	if tEp != "" && isExternalEndpoint(tEp, instance) {
-		if !seen[tEp] {
-			endpoints = append(endpoints, tEp)
-			seen[tEp] = true
+	for _, ep := range []string{tracesEndpoint(instance), logsEndpoint(instance)} {
+		if ep == "" {
+			continue
 		}
-	}
-
-	lEp := logsEndpoint(instance)
-	if lEp != "" && isExternalEndpoint(lEp, instance) {
-		if !seen[lEp] {
-			endpoints = append(endpoints, lEp)
-			seen[lEp] = true
+		target, err := classifyServiceURL(ep, instance.Namespace)
+		if err != nil {
+			continue
 		}
+		key := dedupKey(target)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		targets = append(targets, target)
 	}
 
-	return endpoints
-}
-
-func isExternalEndpoint(rawURL string, instance *clawv1alpha1.Claw) bool {
-	target, err := classifyServiceURL(rawURL, instance.Namespace)
-	if err != nil {
-		return false
-	}
-	return target.External
+	return targets
 }
 
 // buildCollectorConfig generates the OTel Collector YAML configuration

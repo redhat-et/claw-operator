@@ -1,4 +1,4 @@
-name: Diagnostics E2E Tests
+name: kind test
 
 on:
   push:
@@ -10,12 +10,12 @@ on:
 
 jobs:
   test-diagnostics:
-    name: OTel Diagnostics on Kind
+    name: kind test
     runs-on: ubuntu-latest
     env:
       KIND_CLUSTER: claw-diagnostics-test
-      IMG: claw-operator:test
-      PROXY_IMG: claw-proxy:test
+      IMG: quay.io/redhat-et/claw-operator:test
+      PROXY_IMG: quay.io/redhat-et/claw-proxy:test
       CONTAINER_TOOL: docker
       INSTANCE: instance
       NAMESPACE: default
@@ -55,7 +55,7 @@ jobs:
       - name: Install CRDs and deploy operator
         run: |
           make install
-          make deploy IMG=$IMG PROXY_IMG=$PROXY_IMG
+          make deploy IMG=$IMG PROXY_IMG=$PROXY_IMG IMAGE_PULL_POLICY=IfNotPresent
 
       - name: Wait for operator pod
         run: |
@@ -279,6 +279,19 @@ jobs:
             || { echo "FAIL: port 9464 not exposed on otel-collector sidecar"; exit 1; }
           echo "PASS: Prometheus metrics port 9464 exposed"
 
+      - name: Validate in-cluster NP egress rule for telemetry backend
+        run: |
+          echo "Verifying in-cluster egress rule for otel-backend.default.svc:4318..."
+          NP=$(kubectl get networkpolicy ${INSTANCE}-egress -n $NAMESPACE -o json)
+          # In-cluster same-namespace target should have a podSelector rule with port 4318
+          if echo "$NP" | jq -e '.spec.egress[] | select(.ports[]?.port==4318) | select(.to[]?.podSelector)' > /dev/null 2>&1; then
+            echo "PASS: in-cluster egress rule with podSelector found for port 4318"
+          else
+            echo "FAIL: expected in-cluster egress rule with podSelector for port 4318"
+            echo "$NP" | jq '.spec.egress'
+            exit 1
+          fi
+
       - name: Test split exporters (different endpoints)
         run: |
           echo "Patching Claw to use different trace/log endpoints..."
@@ -307,16 +320,17 @@ jobs:
           kubectl patch claw $INSTANCE -n $NAMESPACE --type merge \
             -p '{"spec":{"traces":{"endpoint":"http://external.example.com:4318"}}}'
 
-          echo "Waiting for egress rule on port 4318..."
+          echo "Waiting for external egress rule on port 4318..."
           for i in $(seq 1 60); do
             NP=$(kubectl get networkpolicy ${INSTANCE}-egress -n $NAMESPACE -o json 2>/dev/null || true)
-            if echo "$NP" | jq -e '.spec.egress[] | .ports[]? | select(.port==4318)' > /dev/null 2>&1; then
-              echo "PASS: egress rule for port 4318 found in ${INSTANCE}-egress NP"
+            # External rule should have port 4318 but NO 'to' selector (port-only rule)
+            if echo "$NP" | jq -e '.spec.egress[] | select(.ports[]?.port==4318) | select(has("to") | not)' > /dev/null 2>&1; then
+              echo "PASS: external egress rule for port 4318 found in ${INSTANCE}-egress NP"
               exit 0
             fi
             sleep 2
           done
-          echo "FAIL: egress rule for port 4318 not found after 2 minutes"
+          echo "FAIL: external egress rule for port 4318 not found after 2 minutes"
           kubectl get networkpolicy ${INSTANCE}-egress -n $NAMESPACE -o yaml
           exit 1
 
@@ -339,16 +353,29 @@ jobs:
           kubectl get events -n $NAMESPACE --sort-by=.lastTimestamp 2>/dev/null || true
 
           echo ""
-          echo "=== Pods (user namespace) ==="
-          kubectl get pods -o wide -n $NAMESPACE 2>/dev/null || true
-
-          echo ""
-          echo "=== Deployments (user namespace) ==="
-          kubectl get deployments -o wide -n $NAMESPACE 2>/dev/null || true
+          echo "=== All Resources (user namespace) ==="
+          kubectl get all -n $NAMESPACE 2>/dev/null || true
 
           echo ""
           echo "=== Gateway Pod Describe ==="
           kubectl describe pods -l claw.sandbox.redhat.com/instance=$INSTANCE -n $NAMESPACE 2>/dev/null || true
+
+          echo ""
+          echo "=== Gateway Container Logs ==="
+          GATEWAY_POD=$(kubectl get pods -l claw.sandbox.redhat.com/instance=$INSTANCE \
+            -n $NAMESPACE -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$GATEWAY_POD" ]; then
+            for CONTAINER in $(kubectl get pod "$GATEWAY_POD" -n $NAMESPACE \
+              -o jsonpath='{.spec.initContainers[*].name} {.spec.containers[*].name}' 2>/dev/null || true); do
+              echo ""
+              echo "--- Logs: $CONTAINER ---"
+              kubectl logs "$GATEWAY_POD" -n $NAMESPACE -c "$CONTAINER" --tail=100 2>/dev/null || echo "(no logs)"
+            done
+          fi
+
+          echo ""
+          echo "=== ConfigMap Data ==="
+          kubectl get configmap ${INSTANCE}-config -n $NAMESPACE -o yaml 2>/dev/null || true
 
           echo ""
           echo "=== NetworkPolicies ==="
