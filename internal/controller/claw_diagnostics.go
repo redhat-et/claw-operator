@@ -305,14 +305,14 @@ func buildCollectorConfig(instance *clawv1alpha1.Claw) string {
 
 	sameEndpoint := hasTraces && hasLogs && tEp == lEp
 	if hasTraces && hasLogs && !sameEndpoint {
-		fmt.Fprintf(&b, "  otlphttp/traces:\n    endpoint: %s\n", tEp)
-		fmt.Fprintf(&b, "  otlphttp/logs:\n    endpoint: %s\n", lEp)
+		fmt.Fprintf(&b, "  otlp_http/traces:\n    endpoint: %s\n", tEp)
+		fmt.Fprintf(&b, "  otlp_http/logs:\n    endpoint: %s\n", lEp)
 	} else if hasTraces || hasLogs {
 		ep := tEp
 		if ep == "" {
 			ep = lEp
 		}
-		fmt.Fprintf(&b, "  otlphttp:\n    endpoint: %s\n", ep)
+		fmt.Fprintf(&b, "  otlp_http:\n    endpoint: %s\n", ep)
 	}
 
 	b.WriteString("service:\n")
@@ -326,22 +326,22 @@ func buildCollectorConfig(instance *clawv1alpha1.Claw) string {
 		b.WriteString("    traces:\n")
 		b.WriteString("      receivers: [otlp]\n")
 		if sameEndpoint {
-			b.WriteString("      exporters: [otlphttp]\n")
+			b.WriteString("      exporters: [otlp_http]\n")
 		} else if hasLogs {
-			b.WriteString("      exporters: [otlphttp/traces]\n")
+			b.WriteString("      exporters: [otlp_http/traces]\n")
 		} else {
-			b.WriteString("      exporters: [otlphttp]\n")
+			b.WriteString("      exporters: [otlp_http]\n")
 		}
 	}
 	if hasLogs {
 		b.WriteString("    logs:\n")
 		b.WriteString("      receivers: [otlp]\n")
 		if sameEndpoint {
-			b.WriteString("      exporters: [otlphttp]\n")
+			b.WriteString("      exporters: [otlp_http]\n")
 		} else if hasTraces {
-			b.WriteString("      exporters: [otlphttp/logs]\n")
+			b.WriteString("      exporters: [otlp_http/logs]\n")
 		} else {
-			b.WriteString("      exporters: [otlphttp]\n")
+			b.WriteString("      exporters: [otlp_http]\n")
 		}
 	}
 

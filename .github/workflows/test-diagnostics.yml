@@ -1,0 +1,359 @@
+name: Diagnostics E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-diagnostics:
+    name: OTel Diagnostics on Kind
+    runs-on: ubuntu-latest
+    env:
+      KIND_CLUSTER: claw-diagnostics-test
+      IMG: claw-operator:test
+      PROXY_IMG: claw-proxy:test
+      CONTAINER_TOOL: docker
+      INSTANCE: instance
+      NAMESPACE: default
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Create Kind cluster
+        run: kind create cluster --name $KIND_CLUSTER
+
+      - name: Build and load operator images
+        run: |
+          make container-build IMG=$IMG
+          make container-build-proxy PROXY_IMG=$PROXY_IMG
+          kind load docker-image $IMG $PROXY_IMG --name $KIND_CLUSTER
+
+      - name: Install CertManager
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.16.3/cert-manager.yaml
+          kubectl wait deployment cert-manager-webhook \
+            --for=condition=Available \
+            --namespace cert-manager \
+            --timeout=5m
+
+      - name: Install CRDs and deploy operator
+        run: |
+          make install
+          make deploy IMG=$IMG PROXY_IMG=$PROXY_IMG
+
+      - name: Wait for operator pod
+        run: |
+          echo "Waiting for controller-manager pod..."
+          for i in $(seq 1 60); do
+            POD=$(kubectl get pods -l control-plane=controller-manager \
+              -n claw-operator -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$POD" ]; then
+              PHASE=$(kubectl get pod "$POD" -n claw-operator \
+                -o jsonpath='{.status.phase}' 2>/dev/null || true)
+              if [ "$PHASE" = "Running" ]; then
+                echo "Operator pod $POD is Running"
+                break
+              fi
+            fi
+            sleep 2
+          done
+          kubectl get pods -n claw-operator
+
+      - name: Deploy mock OTel backend
+        run: |
+          kubectl apply -f - <<'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: otel-backend-config
+          data:
+            config.yaml: |
+              receivers:
+                otlp:
+                  protocols:
+                    http:
+                      endpoint: 0.0.0.0:4318
+              exporters:
+                debug:
+                  verbosity: basic
+              service:
+                pipelines:
+                  traces:
+                    receivers: [otlp]
+                    exporters: [debug]
+                  logs:
+                    receivers: [otlp]
+                    exporters: [debug]
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: otel-backend
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: otel-backend
+            template:
+              metadata:
+                labels:
+                  app: otel-backend
+              spec:
+                containers:
+                  - name: collector
+                    image: mirror.gcr.io/otel/opentelemetry-collector:0.152.1
+                    args: ["--config=/etc/otel/config.yaml"]
+                    ports:
+                      - containerPort: 4318
+                    volumeMounts:
+                      - name: config
+                        mountPath: /etc/otel/config.yaml
+                        subPath: config.yaml
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop: [ALL]
+                      runAsNonRoot: true
+                      runAsUser: 65532
+                      seccompProfile:
+                        type: RuntimeDefault
+                volumes:
+                  - name: config
+                    configMap:
+                      name: otel-backend-config
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: otel-backend
+          spec:
+            selector:
+              app: otel-backend
+            ports:
+              - port: 4318
+                targetPort: 4318
+          EOF
+          kubectl wait deployment otel-backend --for=condition=Available --timeout=2m
+
+      - name: Create credential secret and Claw CR
+        run: |
+          kubectl create secret generic gemini-api-key \
+            --from-literal=api-key=test-api-key-value \
+            -n $NAMESPACE
+          kubectl label secret gemini-api-key \
+            claw.sandbox.redhat.com/instance=$INSTANCE \
+            -n $NAMESPACE
+
+          kubectl apply -n $NAMESPACE -f - <<'EOF'
+          apiVersion: claw.sandbox.redhat.com/v1alpha1
+          kind: Claw
+          metadata:
+            name: instance
+          spec:
+            credentials:
+              - name: gemini
+                type: apiKey
+                secretRef:
+                  - name: gemini-api-key
+                    key: api-key
+                domain: ".googleapis.com"
+                apiKey:
+                  header: x-goog-api-key
+            traces:
+              enabled: true
+              endpoint: "http://otel-backend.default.svc:4318"
+            logs:
+              enabled: true
+              endpoint: "http://otel-backend.default.svc:4318"
+            metrics:
+              enabled: true
+          EOF
+
+      - name: Wait for Claw Ready
+        run: |
+          echo "Waiting for Claw Ready condition..."
+          for i in $(seq 1 90); do
+            STATUS=$(kubectl get claw $INSTANCE -n $NAMESPACE \
+              -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+            if [ "$STATUS" = "True" ]; then
+              echo "Claw is Ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: Claw did not become Ready within 3 minutes"
+          kubectl get claw $INSTANCE -n $NAMESPACE -o yaml
+          exit 1
+
+      - name: Validate sidecar injection
+        run: |
+          CONTAINERS=$(kubectl get deployment $INSTANCE -n $NAMESPACE \
+            -o 'jsonpath={.spec.template.spec.containers[*].name}')
+          echo "Containers: $CONTAINERS"
+
+          echo "$CONTAINERS" | grep -q "gateway" || { echo "FAIL: gateway container not found"; exit 1; }
+          echo "$CONTAINERS" | grep -q "otel-collector" || { echo "FAIL: otel-collector sidecar not found"; exit 1; }
+          echo "PASS: sidecar injection verified (gateway + otel-collector)"
+
+      - name: Validate OTel Collector config (same-endpoint, single exporter)
+        run: |
+          CONFIG=$(kubectl get configmap ${INSTANCE}-config -n $NAMESPACE \
+            -o 'jsonpath={.data.otel-collector\.yaml}')
+          echo "Collector config:"
+          echo "$CONFIG"
+
+          echo "$CONFIG" | grep -q "127.0.0.1:4318" || { echo "FAIL: OTLP receiver endpoint missing"; exit 1; }
+          echo "$CONFIG" | grep -q "0.0.0.0:9464" || { echo "FAIL: Prometheus exporter endpoint missing"; exit 1; }
+          echo "$CONFIG" | grep -q "otlp_http:" || { echo "FAIL: otlp_http exporter missing"; exit 1; }
+          echo "$CONFIG" | grep -q "http://otel-backend.default.svc:4318" || { echo "FAIL: backend endpoint missing"; exit 1; }
+          echo "$CONFIG" | grep -q "metrics:" || { echo "FAIL: metrics pipeline missing"; exit 1; }
+          echo "$CONFIG" | grep -q "traces:" || { echo "FAIL: traces pipeline missing"; exit 1; }
+          echo "$CONFIG" | grep -q "logs:" || { echo "FAIL: logs pipeline missing"; exit 1; }
+
+          # Same endpoint should NOT produce named exporters
+          if echo "$CONFIG" | grep -q "otlp_http/traces"; then
+            echo "FAIL: should not have named otlp_http/traces exporter for same endpoint"
+            exit 1
+          fi
+          if echo "$CONFIG" | grep -q "otlp_http/logs"; then
+            echo "FAIL: should not have named otlp_http/logs exporter for same endpoint"
+            exit 1
+          fi
+          echo "PASS: collector config validated (same-endpoint single exporter)"
+
+      - name: Validate operator.json diagnostics keys
+        run: |
+          OPERATOR_JSON=$(kubectl get configmap ${INSTANCE}-config -n $NAMESPACE \
+            -o 'jsonpath={.data.operator\.json}')
+          echo "operator.json diagnostics:"
+          echo "$OPERATOR_JSON" | jq '.diagnostics'
+
+          TRACES=$(echo "$OPERATOR_JSON" | jq '.diagnostics.otel.traces')
+          LOGS=$(echo "$OPERATOR_JSON" | jq '.diagnostics.otel.logs')
+          ENDPOINT=$(echo "$OPERATOR_JSON" | jq -r '.diagnostics.otel.endpoint')
+
+          [ "$TRACES" = "true" ] || { echo "FAIL: diagnostics.otel.traces != true (got $TRACES)"; exit 1; }
+          [ "$LOGS" = "true" ] || { echo "FAIL: diagnostics.otel.logs != true (got $LOGS)"; exit 1; }
+          [ "$ENDPOINT" = "http://localhost:4318" ] || { echo "FAIL: diagnostics.otel.endpoint != http://localhost:4318 (got $ENDPOINT)"; exit 1; }
+          echo "PASS: operator.json diagnostics keys validated"
+
+      - name: Validate OTel env vars on gateway
+        run: |
+          ENV_JSON=$(kubectl get deployment $INSTANCE -n $NAMESPACE \
+            -o 'jsonpath={.spec.template.spec.containers[?(@.name=="gateway")].env}')
+          echo "Gateway env vars:"
+          echo "$ENV_JSON" | jq '.'
+
+          echo "$ENV_JSON" | jq -e '.[] | select(.name=="OTEL_SERVICE_NAME" and .value=="openclaw")' > /dev/null \
+            || { echo "FAIL: OTEL_SERVICE_NAME not set to openclaw"; exit 1; }
+          echo "$ENV_JSON" | jq -e '.[] | select(.name=="OTEL_RESOURCE_ATTRIBUTES")' > /dev/null \
+            || { echo "FAIL: OTEL_RESOURCE_ATTRIBUTES not found"; exit 1; }
+          echo "$ENV_JSON" | jq -e '.[] | select(.name=="OTEL_TRACES_SAMPLER" and .value=="parentbased_traceidratio")' > /dev/null \
+            || { echo "FAIL: OTEL_TRACES_SAMPLER not set"; exit 1; }
+          echo "$ENV_JSON" | jq -e '.[] | select(.name=="OTEL_TRACES_SAMPLER_ARG" and .value=="1")' > /dev/null \
+            || { echo "FAIL: OTEL_TRACES_SAMPLER_ARG not set to 1"; exit 1; }
+          echo "PASS: OTel env vars validated"
+
+      - name: Validate Prometheus metrics port on sidecar
+        run: |
+          PORTS=$(kubectl get deployment $INSTANCE -n $NAMESPACE \
+            -o 'jsonpath={.spec.template.spec.containers[?(@.name=="otel-collector")].ports}')
+          echo "OTel sidecar ports: $PORTS"
+          echo "$PORTS" | jq -e '.[] | select(.containerPort==9464)' > /dev/null \
+            || { echo "FAIL: port 9464 not exposed on otel-collector sidecar"; exit 1; }
+          echo "PASS: Prometheus metrics port 9464 exposed"
+
+      - name: Test split exporters (different endpoints)
+        run: |
+          echo "Patching Claw to use different trace/log endpoints..."
+          kubectl patch claw $INSTANCE -n $NAMESPACE --type merge \
+            -p '{"spec":{"logs":{"endpoint":"http://otel-backend-logs.default.svc:4318"}}}'
+
+          echo "Waiting for reconciliation..."
+          for i in $(seq 1 60); do
+            CONFIG=$(kubectl get configmap ${INSTANCE}-config -n $NAMESPACE \
+              -o 'jsonpath={.data.otel-collector\.yaml}' 2>/dev/null || true)
+            if echo "$CONFIG" | grep -q "otlp_http/traces:" && echo "$CONFIG" | grep -q "otlp_http/logs:"; then
+              echo "Collector config after patch:"
+              echo "$CONFIG"
+              echo "PASS: split named exporters verified (otlp_http/traces + otlp_http/logs)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "FAIL: split named exporters not found after 2 minutes"
+          kubectl get configmap ${INSTANCE}-config -n $NAMESPACE -o 'jsonpath={.data.otel-collector\.yaml}'
+          exit 1
+
+      - name: Test NP egress rules for external endpoint
+        run: |
+          echo "Patching Claw to use external trace endpoint..."
+          kubectl patch claw $INSTANCE -n $NAMESPACE --type merge \
+            -p '{"spec":{"traces":{"endpoint":"http://external.example.com:4318"}}}'
+
+          echo "Waiting for egress rule on port 4318..."
+          for i in $(seq 1 60); do
+            NP=$(kubectl get networkpolicy ${INSTANCE}-egress -n $NAMESPACE -o json 2>/dev/null || true)
+            if echo "$NP" | jq -e '.spec.egress[] | .ports[]? | select(.port==4318)' > /dev/null 2>&1; then
+              echo "PASS: egress rule for port 4318 found in ${INSTANCE}-egress NP"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "FAIL: egress rule for port 4318 not found after 2 minutes"
+          kubectl get networkpolicy ${INSTANCE}-egress -n $NAMESPACE -o yaml
+          exit 1
+
+      - name: Collect debug info on failure
+        if: failure()
+        run: |
+          echo "=== Controller Manager Logs ==="
+          POD=$(kubectl get pods -l control-plane=controller-manager \
+            -n claw-operator -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$POD" ]; then
+            kubectl logs "$POD" -n claw-operator --tail=200 || true
+          fi
+
+          echo ""
+          echo "=== Claw CR Status ==="
+          kubectl get claw $INSTANCE -n $NAMESPACE -o yaml 2>/dev/null || true
+
+          echo ""
+          echo "=== Events (user namespace) ==="
+          kubectl get events -n $NAMESPACE --sort-by=.lastTimestamp 2>/dev/null || true
+
+          echo ""
+          echo "=== Pods (user namespace) ==="
+          kubectl get pods -o wide -n $NAMESPACE 2>/dev/null || true
+
+          echo ""
+          echo "=== Deployments (user namespace) ==="
+          kubectl get deployments -o wide -n $NAMESPACE 2>/dev/null || true
+
+          echo ""
+          echo "=== Gateway Pod Describe ==="
+          kubectl describe pods -l claw.sandbox.redhat.com/instance=$INSTANCE -n $NAMESPACE 2>/dev/null || true
+
+          echo ""
+          echo "=== NetworkPolicies ==="
+          kubectl get networkpolicy -n $NAMESPACE -o yaml 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: kind delete cluster --name $KIND_CLUSTER
