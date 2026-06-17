@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -47,10 +46,6 @@ var (
 	// gatewayImage is the upstream OpenClaw image used by the claw deployment.
 	// Pre-loaded into Kind so e2e tests can verify init container patching.
 	gatewayImage = "ghcr.io/openclaw/openclaw:slim"
-
-	// skillImage is a minimal OCI image containing a SKILL.md, used to
-	// test ImageVolume-based skill delivery in e2e.
-	skillImage = "example.com/e2e-skill:latest"
 )
 
 // TestMain runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
@@ -88,11 +83,6 @@ func TestMain(m *testing.M) {
 
 	if err := pullAndLoadImage(gatewayImage, kindBin, kindCluster); err != nil {
 		fmt.Fprintf(os.Stderr, "gateway image setup failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := buildAndLoadSkillImage(skillImage, kindBin, kindCluster); err != nil {
-		fmt.Fprintf(os.Stderr, "skill image setup failed: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -171,33 +161,6 @@ func pullAndLoadImage(image, kindBin, kindCluster string) error {
 	if err := runStreaming(kindBin, "load", "image-archive", tarFile,
 		"--name", kindCluster); err != nil {
 		return fmt.Errorf("load %s into Kind: %w", image, err)
-	}
-	return nil
-}
-
-// buildAndLoadSkillImage builds a minimal OCI image from test/e2e/testdata/skill-image
-// and loads it into Kind for ImageVolume testing.
-func buildAndLoadSkillImage(image, kindBin, kindCluster string) error {
-	dir, err := utils.GetProjectDir()
-	if err != nil {
-		return fmt.Errorf("get project dir: %w", err)
-	}
-	contextDir := filepath.Join(dir, "test", "e2e", "testdata", "skill-image")
-	tarFile := "tmp/skill-image.tar"
-
-	fmt.Printf("Building skill image %s...\n", image)
-	if err := runStreaming("podman", "build", "-t", image, contextDir); err != nil {
-		return fmt.Errorf("build skill image: %w", err)
-	}
-
-	fmt.Println("Loading skill image into Kind cluster...")
-	_ = runStreaming("rm", "-f", tarFile)
-	if err := runStreaming("podman", "save", "-o", tarFile, image); err != nil {
-		return fmt.Errorf("save skill image: %w", err)
-	}
-	if err := runStreaming(kindBin, "load", "image-archive", tarFile,
-		"--name", kindCluster); err != nil {
-		return fmt.Errorf("load skill image into Kind: %w", err)
 	}
 	return nil
 }
