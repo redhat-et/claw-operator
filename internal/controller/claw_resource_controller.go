@@ -923,7 +923,7 @@ func (r *ClawResourceReconciler) configureDeployments(
 			return fmt.Errorf("failed to configure metrics sidecar: %w", err)
 		}
 	}
-	if !userManagedConfig(instance) && !pluginInstallationDisabled(instance) {
+	if !pluginInstallationDisabled(instance) {
 		plugins := effectivePlugins(instance)
 		if len(plugins) > 0 {
 			if err := configurePluginsInitContainer(objects, instance, plugins); err != nil {
