@@ -50,6 +50,7 @@ jobs:
       - name: Install Kind
         run: |
           curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          echo "50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54  kind" | sha256sum -c
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
           kind version
@@ -78,20 +79,10 @@ jobs:
 
       - name: Wait for operator pod
         run: |
-          echo "Waiting for controller-manager pod..."
-          for i in $(seq 1 60); do
-            POD=$(kubectl get pods -l control-plane=controller-manager \
-              -n claw-operator -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-            if [ -n "$POD" ]; then
-              PHASE=$(kubectl get pod "$POD" -n claw-operator \
-                -o jsonpath='{.status.phase}' 2>/dev/null || true)
-              if [ "$PHASE" = "Running" ]; then
-                echo "Operator pod $POD is Running"
-                break
-              fi
-            fi
-            sleep 2
-          done
+          kubectl wait deployment claw-operator-controller-manager \
+            --for=condition=Available \
+            --namespace claw-operator \
+            --timeout=2m
           kubectl get pods -n claw-operator
 
       - name: Create credential secret and Claw CR
