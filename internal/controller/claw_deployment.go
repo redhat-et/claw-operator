@@ -36,6 +36,7 @@ import (
 )
 
 const gitCredentialsVolumeName = "git-credentials"
+const protectedFilesVolumeName = "protected-files"
 
 // configureClawImage overrides the OpenClaw container image tag on the gateway
 // Deployment when spec.version is set. Affects init-volume, init-config (init
@@ -592,14 +593,101 @@ func setOrAppendVolume(volumes []any, volume map[string]any) []any {
 	return append(volumes, volume)
 }
 
-// configureInitConfigForUserManaged sets env vars and volume mounts on the
-// init-config container for user-managed mode: management mode flag, agent
-// files source (ConfigMap or Git), and whole-home PVC mount.
-func configureInitConfigForUserManaged(container map[string]any, instance *clawv1alpha1.Claw) error {
+// configureAgentFiles wires agent file seed sources (ConfigMap or Git) into
+// the init-config container regardless of management mode. merge.js handles
+// agentFiles independently of CLAW_CONFIG_MANAGEMENT, so only the env vars,
+// volume mounts, and deployment volumes need to be set here.
+func configureAgentFiles(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
+	if instance.Spec.AgentFiles == nil {
+		return nil
+	}
+
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		initContainers, found, err := unstructured.NestedSlice(
+			obj.Object, "spec", "template", "spec", "initContainers",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to get init containers from claw deployment: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("initContainers field not found in claw deployment")
+		}
+
+		initConfigFound := false
+		for i, ic := range initContainers {
+			container, ok := ic.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(container, "name")
+			if name != ClawInitConfigContainerName {
+				continue
+			}
+			initConfigFound = true
+			if err := configureAgentFilesOnInitConfig(container, instance); err != nil {
+				return fmt.Errorf("failed to configure agent files on init-config: %w", err)
+			}
+			initContainers[i] = container
+		}
+		if !initConfigFound {
+			return fmt.Errorf("container %q not found in claw deployment", ClawInitConfigContainerName)
+		}
+		if err := unstructured.SetNestedSlice(
+			obj.Object, initContainers, "spec", "template", "spec", "initContainers",
+		); err != nil {
+			return fmt.Errorf("failed to set init containers on claw deployment: %w", err)
+		}
+
+		volumes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "volumes")
+		if instance.Spec.AgentFiles.ConfigMapRef != nil {
+			volumes = setOrAppendVolume(volumes, map[string]any{
+				"name": "agent-files",
+				"configMap": map[string]any{
+					"name": instance.Spec.AgentFiles.ConfigMapRef.Name,
+				},
+			})
+		}
+		if instance.Spec.AgentFiles.Git != nil && instance.Spec.AgentFiles.Git.SecretRef != nil {
+			volumes = setOrAppendVolume(volumes, map[string]any{
+				"name": "git-credentials",
+				"secret": map[string]any{
+					"secretName": instance.Spec.AgentFiles.Git.SecretRef.Name,
+				},
+			})
+		}
+		if len(instance.Spec.AgentFiles.ReadOnly) > 0 {
+			volumes = setOrAppendVolume(volumes, map[string]any{
+				"name":     protectedFilesVolumeName,
+				"emptyDir": map[string]any{},
+			})
+		}
+		if err := unstructured.SetNestedSlice(
+			obj.Object, volumes, "spec", "template", "spec", "volumes",
+		); err != nil {
+			return fmt.Errorf("failed to set volumes on claw deployment: %w", err)
+		}
+
+		if len(instance.Spec.AgentFiles.ReadOnly) > 0 {
+			if err := configureReadOnlyMounts(obj, instance.Spec.AgentFiles.ReadOnly); err != nil {
+				return fmt.Errorf("failed to configure read-only mounts: %w", err)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("claw deployment not found in manifests")
+}
+
+// configureAgentFilesOnInitConfig sets agent file env vars and volume mounts
+// on the init-config container.
+func configureAgentFilesOnInitConfig(container map[string]any, instance *clawv1alpha1.Claw) error {
 	envVars, _, _ := unstructured.NestedSlice(container, "env")
-	envVars = setOrAppendEnv(envVars, ClawConfigManagementEnvVar, string(clawv1alpha1.ConfigManagementUser))
 	envVars = setOrAppendEnv(envVars, "AGENT_FILES_APPLY_POLICY", agentFilesApplyPolicy(instance))
-	if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.ConfigMapRef != nil {
+	if instance.Spec.AgentFiles.ConfigMapRef != nil {
 		key := agentFilesConfigMapKey(instance.Spec.AgentFiles.ConfigMapRef)
 		envVars = setOrAppendEnv(envVars, "AGENT_FILES_SOURCE", "configmap")
 		envVars = setOrAppendEnv(envVars, "AGENT_FILES_CONFIGMAP_PATH", "/agent-files/"+key)
@@ -613,7 +701,7 @@ func configureInitConfigForUserManaged(container map[string]any, instance *clawv
 			return fmt.Errorf("failed to set init-config agent files mount: %w", err)
 		}
 	}
-	if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.Git != nil {
+	if instance.Spec.AgentFiles.Git != nil {
 		envVars = setOrAppendEnv(envVars, "AGENT_FILES_SOURCE", "git")
 		envVars = setOrAppendEnv(envVars, "AGENT_FILES_GIT_URL", instance.Spec.AgentFiles.Git.URL)
 		if instance.Spec.AgentFiles.Git.Ref != "" {
@@ -635,16 +723,75 @@ func configureInitConfigForUserManaged(container map[string]any, instance *clawv
 			}
 		}
 	}
-	if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
-		return fmt.Errorf("failed to set init-config env vars: %w", err)
+	if len(instance.Spec.AgentFiles.ReadOnly) > 0 {
+		envVars = setOrAppendEnv(envVars, "AGENT_FILES_READ_ONLY",
+			strings.Join(instance.Spec.AgentFiles.ReadOnly, ","))
+		mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+		mounts = setOrAppendVolumeMount(mounts, map[string]any{
+			"name":      protectedFilesVolumeName,
+			"mountPath": "/protected-files",
+		})
+		if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
+			return fmt.Errorf("failed to set init-config protected files mount: %w", err)
+		}
 	}
-	return configureWholeHomeMount(container)
+	return unstructured.SetNestedSlice(container, envVars, "env")
 }
 
-// configureUserManagedOpenClawFiles switches user-managed deployments to mount
-// the full OpenClaw home and wires optional agent file seed sources into
-// init-config. Default operator-managed deployments keep the existing subPath
-// layout and CR-oriented workspace/skill injection.
+// configureReadOnlyMounts adds read-only subPath mounts on the gateway container
+// for each readOnly entry. Individual files get per-file subPath mounts;
+// directory entries (trailing "/" or "/**") get whole-directory mounts.
+func configureReadOnlyMounts(obj *unstructured.Unstructured, readOnly []string) error {
+	containers, found, err := unstructured.NestedSlice(
+		obj.Object, "spec", "template", "spec", "containers",
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get containers from claw deployment: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("containers field not found in claw deployment")
+	}
+
+	gatewayFound := false
+	for i, c := range containers {
+		container, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(container, "name")
+		if name != ClawGatewayContainerName {
+			continue
+		}
+		gatewayFound = true
+
+		mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+		for _, entry := range readOnly {
+			clean := strings.TrimSuffix(strings.TrimSuffix(entry, "/**"), "/")
+			mounts = setOrAppendVolumeMount(mounts, map[string]any{
+				"name":      protectedFilesVolumeName,
+				"mountPath": workspaceDir + "/" + clean,
+				"subPath":   "workspace/" + clean,
+				"readOnly":  true,
+			})
+		}
+		if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
+			return fmt.Errorf("failed to set read-only mounts on gateway: %w", err)
+		}
+		containers[i] = container
+	}
+	if !gatewayFound {
+		return fmt.Errorf("container %q not found in claw deployment", ClawGatewayContainerName)
+	}
+	return unstructured.SetNestedSlice(
+		obj.Object, containers, "spec", "template", "spec", "containers",
+	)
+}
+
+// configureUserManagedOpenClawFiles sets management-mode-specific configuration
+// for user-managed deployments: the CLAW_CONFIG_MANAGEMENT env var (read by
+// merge.js) and whole-home PVC mount on both init-config and gateway containers.
+// This function is temporary — it will be removed when merge.js derives behavior
+// from file-level signals instead of a mode flag (design doc step 6).
 func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
 	if !userManagedConfig(instance) {
 		return nil
@@ -656,7 +803,9 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 			continue
 		}
 
-		initContainers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "initContainers")
+		initContainers, found, err := unstructured.NestedSlice(
+			obj.Object, "spec", "template", "spec", "initContainers",
+		)
 		if err != nil {
 			return fmt.Errorf("failed to get init containers from claw deployment: %w", err)
 		}
@@ -675,15 +824,22 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 				continue
 			}
 			initConfigFound = true
-			if err := configureInitConfigForUserManaged(container, instance); err != nil {
-				return fmt.Errorf("failed to configure init-config for user-managed mode: %w", err)
+			envVars, _, _ := unstructured.NestedSlice(container, "env")
+			envVars = setOrAppendEnv(envVars, ClawConfigManagementEnvVar, string(clawv1alpha1.ConfigManagementUser))
+			if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
+				return fmt.Errorf("failed to set init-config env vars: %w", err)
+			}
+			if err := configureWholeHomeMount(container); err != nil {
+				return fmt.Errorf("failed to configure init-config home mount: %w", err)
 			}
 			initContainers[i] = container
 		}
 		if !initConfigFound {
 			return fmt.Errorf("container %q not found in claw deployment", ClawInitConfigContainerName)
 		}
-		if err := unstructured.SetNestedSlice(obj.Object, initContainers, "spec", "template", "spec", "initContainers"); err != nil {
+		if err := unstructured.SetNestedSlice(
+			obj.Object, initContainers, "spec", "template", "spec", "initContainers",
+		); err != nil {
 			return fmt.Errorf("failed to set init containers on claw deployment: %w", err)
 		}
 
@@ -713,30 +869,10 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 		if !gatewayFound {
 			return fmt.Errorf("container %q not found in claw deployment", ClawGatewayContainerName)
 		}
-		if err := unstructured.SetNestedSlice(obj.Object, containers, "spec", "template", "spec", "containers"); err != nil {
+		if err := unstructured.SetNestedSlice(
+			obj.Object, containers, "spec", "template", "spec", "containers",
+		); err != nil {
 			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
-		}
-
-		volumes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "volumes")
-		if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.ConfigMapRef != nil {
-			volumes = setOrAppendVolume(volumes, map[string]any{
-				"name": "agent-files",
-				"configMap": map[string]any{
-					"name": instance.Spec.AgentFiles.ConfigMapRef.Name,
-				},
-			})
-		}
-		if instance.Spec.AgentFiles != nil && instance.Spec.AgentFiles.Git != nil &&
-			instance.Spec.AgentFiles.Git.SecretRef != nil {
-			volumes = setOrAppendVolume(volumes, map[string]any{
-				"name": "git-credentials",
-				"secret": map[string]any{
-					"secretName": instance.Spec.AgentFiles.Git.SecretRef.Name,
-				},
-			})
-		}
-		if err := unstructured.SetNestedSlice(obj.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
-			return fmt.Errorf("failed to set volumes on claw deployment: %w", err)
 		}
 		return nil
 	}

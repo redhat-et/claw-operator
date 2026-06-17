@@ -324,7 +324,7 @@ func TestClawImageOverrideIntegration(t *testing.T) {
 
 		gateway := findContainer(deployment, ClawGatewayContainerName)
 		require.NotNil(t, gateway, "gateway container should exist")
-		assert.Equal(t, OpenClawImageBase+":2026.6.1", gateway.Image,
+		assert.Equal(t, OpenClawImageBase+":2026.6.8", gateway.Image,
 			"should use Kustomize default when spec.version is empty")
 	})
 }
@@ -828,114 +828,108 @@ func TestConfigureClawDeploymentConfigMode(t *testing.T) {
 	})
 }
 
-func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
-	makeDeployment := func() []*unstructured.Unstructured {
-		dep := &unstructured.Unstructured{}
-		dep.SetKind(DeploymentKind)
-		dep.SetName(getClawDeploymentName(testInstanceName))
-		dep.Object["spec"] = map[string]any{
-			"template": map[string]any{
-				"spec": map[string]any{
-					"initContainers": []any{
-						map[string]any{
-							"name": ClawInitConfigContainerName,
-							"env": []any{
-								map[string]any{"name": ClawConfigModeEnvVar, "value": "merge"},
-							},
-							"volumeMounts": []any{
-								map[string]any{"name": "claw-home", "mountPath": "/home/node/.openclaw", "subPath": "home"},
-								map[string]any{"name": "config", "mountPath": "/config"},
-							},
+func makeTestDeployment() []*unstructured.Unstructured {
+	dep := &unstructured.Unstructured{}
+	dep.SetKind(DeploymentKind)
+	dep.SetName(getClawDeploymentName(testInstanceName))
+	dep.Object["spec"] = map[string]any{
+		"template": map[string]any{
+			"spec": map[string]any{
+				"initContainers": []any{
+					map[string]any{
+						"name": ClawInitConfigContainerName,
+						"env": []any{
+							map[string]any{"name": ClawConfigModeEnvVar, "value": "merge"},
 						},
-					},
-					"containers": []any{
-						map[string]any{
-							"name": ClawGatewayContainerName,
-							"volumeMounts": []any{
-								map[string]any{"name": "claw-home", "mountPath": "/home/node/.openclaw", "subPath": "home"},
-								map[string]any{"name": "claw-home", "mountPath": "/home/node/.local", "subPath": "home/.local"},
-								map[string]any{"name": "proxy-ca", "mountPath": "/etc/proxy-ca", "readOnly": true},
-							},
+						"volumeMounts": []any{
+							map[string]any{"name": "claw-home", "mountPath": "/home/node/.openclaw", "subPath": "home"},
+							map[string]any{"name": "config", "mountPath": "/config"},
 						},
-					},
-					"volumes": []any{
-						map[string]any{"name": "claw-home", "persistentVolumeClaim": map[string]any{"claimName": testInstanceName + "-home-pvc"}},
-						map[string]any{"name": "config", "configMap": map[string]any{"name": testInstanceName + "-config"}},
 					},
 				},
+				"containers": []any{
+					map[string]any{
+						"name": ClawGatewayContainerName,
+						"volumeMounts": []any{
+							map[string]any{"name": "claw-home", "mountPath": "/home/node/.openclaw", "subPath": "home"},
+							map[string]any{"name": "claw-home", "mountPath": "/home/node/.local", "subPath": "home/.local"},
+							map[string]any{"name": "proxy-ca", "mountPath": "/etc/proxy-ca", "readOnly": true},
+						},
+					},
+				},
+				"volumes": []any{
+					map[string]any{"name": "claw-home", "persistentVolumeClaim": map[string]any{"claimName": testInstanceName + "-home-pvc"}},
+					map[string]any{"name": "config", "configMap": map[string]any{"name": testInstanceName + "-config"}},
+				},
 			},
-		}
-		return []*unstructured.Unstructured{dep}
+		},
 	}
+	return []*unstructured.Unstructured{dep}
+}
 
-	t.Run("no-op for operator-managed config", func(t *testing.T) {
-		objects := makeDeployment()
+func initConfigEnvMap(objects []*unstructured.Unstructured) map[string]string {
+	initContainers, _, _ := unstructured.NestedSlice(
+		objects[0].Object, "spec", "template", "spec", "initContainers",
+	)
+	initConfig := initContainers[0].(map[string]any)
+	envVars := initConfig["env"].([]any)
+	envMap := map[string]string{}
+	for _, e := range envVars {
+		env := e.(map[string]any)
+		if v, ok := env["value"].(string); ok {
+			envMap[env["name"].(string)] = v
+		}
+	}
+	return envMap
+}
+
+func TestConfigureAgentFiles(t *testing.T) {
+	t.Run("no-op when agentFiles is nil", func(t *testing.T) {
+		objects := makeTestDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
-		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
 
-		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
-		initConfig := initContainers[0].(map[string]any)
-		envVars := initConfig["env"].([]any)
-		for _, e := range envVars {
-			assert.NotEqual(t, ClawConfigManagementEnvVar, e.(map[string]any)["name"])
-		}
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		envMap := initConfigEnvMap(objects)
+		assert.Empty(t, envMap["AGENT_FILES_SOURCE"])
+		assert.Empty(t, envMap["AGENT_FILES_APPLY_POLICY"])
 	})
 
-	t.Run("mounts whole home and wires configmap archive source", func(t *testing.T) {
-		objects := makeDeployment()
+	t.Run("configmap source", func(t *testing.T) {
+		objects := makeTestDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
-		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
 		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
 			ConfigMapRef: &clawv1alpha1.AgentFilesConfigMapRef{Name: "my-agentfiles", Key: "bundle.tgz"},
 		}
 
-		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+		require.NoError(t, configureAgentFiles(objects, instance))
 
-		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
-		initConfig := initContainers[0].(map[string]any)
-		envVars := initConfig["env"].([]any)
-		envMap := map[string]string{}
-		for _, e := range envVars {
-			env := e.(map[string]any)
-			if v, ok := env["value"].(string); ok {
-				envMap[env["name"].(string)] = v
-			}
-		}
-		assert.Equal(t, "user", envMap[ClawConfigManagementEnvVar])
+		envMap := initConfigEnvMap(objects)
 		assert.Equal(t, "configmap", envMap["AGENT_FILES_SOURCE"])
 		assert.Equal(t, "/agent-files/bundle.tgz", envMap["AGENT_FILES_CONFIGMAP_PATH"])
 		assert.Equal(t, "IfMissing", envMap["AGENT_FILES_APPLY_POLICY"])
 
+		initContainers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "initContainers",
+		)
+		initConfig := initContainers[0].(map[string]any)
 		initMounts, _, _ := unstructured.NestedSlice(initConfig, "volumeMounts")
-		assert.Contains(t, initMounts, map[string]any{"name": "agent-files", "mountPath": "/agent-files", "readOnly": true})
-		assert.Contains(t, initMounts, map[string]any{"name": "claw-home", "mountPath": "/home/node", "subPath": "home"})
-
-		containers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "containers")
-		gateway := containers[0].(map[string]any)
-		gatewayMounts, _, _ := unstructured.NestedSlice(gateway, "volumeMounts")
-		assert.Contains(t, gatewayMounts, map[string]any{"name": "claw-home", "mountPath": "/home/node", "subPath": "home"})
-		for _, m := range gatewayMounts {
-			mount := m.(map[string]any)
-			assert.NotEqual(t, "/home/node/.openclaw", mount["mountPath"])
-			assert.NotEqual(t, "/home/node/.local", mount["mountPath"])
-		}
+		assert.Contains(t, initMounts,
+			map[string]any{"name": "agent-files", "mountPath": "/agent-files", "readOnly": true})
 
 		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
 		assert.Contains(t, volumes, map[string]any{
-			"name": "agent-files",
-			"configMap": map[string]any{
-				"name": "my-agentfiles",
-			},
+			"name":      "agent-files",
+			"configMap": map[string]any{"name": "my-agentfiles"},
 		})
 	})
 
-	t.Run("wires git source env", func(t *testing.T) {
-		objects := makeDeployment()
+	t.Run("git source", func(t *testing.T) {
+		objects := makeTestDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
-		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
 		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
 			ApplyPolicy: clawv1alpha1.AgentFilesApplyPolicyAlways,
 			Git: &clawv1alpha1.AgentFilesGitSource{
@@ -945,18 +939,9 @@ func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+		require.NoError(t, configureAgentFiles(objects, instance))
 
-		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
-		initConfig := initContainers[0].(map[string]any)
-		envVars := initConfig["env"].([]any)
-		envMap := map[string]string{}
-		for _, e := range envVars {
-			env := e.(map[string]any)
-			if v, ok := env["value"].(string); ok {
-				envMap[env["name"].(string)] = v
-			}
-		}
+		envMap := initConfigEnvMap(objects)
 		assert.Equal(t, "git", envMap["AGENT_FILES_SOURCE"])
 		assert.Equal(t, "https://github.com/example/agents.git", envMap["AGENT_FILES_GIT_URL"])
 		assert.Equal(t, "main", envMap["AGENT_FILES_GIT_REF"])
@@ -964,36 +949,26 @@ func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
 		assert.Equal(t, "Always", envMap["AGENT_FILES_APPLY_POLICY"])
 	})
 
-	t.Run("wires git secretRef volume and env", func(t *testing.T) {
-		objects := makeDeployment()
+	t.Run("git secretRef wires volume and env", func(t *testing.T) {
+		objects := makeTestDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
-		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
 		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
 			Git: &clawv1alpha1.AgentFilesGitSource{
-				URL: "https://github.com/corp/configs.git",
-				SecretRef: &clawv1alpha1.GitSecretRef{
-					Name: "corp-git-creds",
-				},
+				URL:       "https://github.com/corp/configs.git",
+				SecretRef: &clawv1alpha1.GitSecretRef{Name: "corp-git-creds"},
 			},
 		}
 
-		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+		require.NoError(t, configureAgentFiles(objects, instance))
 
-		// Verify env var on init-config
-		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
-		initConfig := initContainers[0].(map[string]any)
-		envVars := initConfig["env"].([]any)
-		envMap := map[string]string{}
-		for _, e := range envVars {
-			env := e.(map[string]any)
-			if v, ok := env["value"].(string); ok {
-				envMap[env["name"].(string)] = v
-			}
-		}
+		envMap := initConfigEnvMap(objects)
 		assert.Equal(t, "/etc/git-credentials", envMap["AGENT_FILES_GIT_SECRET_DIR"])
 
-		// Verify volumeMount on init-config
+		initContainers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "initContainers",
+		)
+		initConfig := initContainers[0].(map[string]any)
 		mounts := initConfig["volumeMounts"].([]any)
 		var gitMount map[string]any
 		for _, m := range mounts {
@@ -1007,7 +982,6 @@ func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
 		assert.Equal(t, "/etc/git-credentials", gitMount["mountPath"])
 		assert.Equal(t, true, gitMount["readOnly"])
 
-		// Verify volume on deployment
 		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
 		var gitVol map[string]any
 		for _, v := range volumes {
@@ -1023,23 +997,224 @@ func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
 	})
 
 	t.Run("no git-credentials volume when secretRef is nil", func(t *testing.T) {
-		objects := makeDeployment()
+		objects := makeTestDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
-		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
 		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
 			Git: &clawv1alpha1.AgentFilesGitSource{
 				URL: "https://github.com/example/public.git",
 			},
 		}
 
-		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+		require.NoError(t, configureAgentFiles(objects, instance))
 
 		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
 		for _, v := range volumes {
 			vol := v.(map[string]any)
 			assert.NotEqual(t, gitCredentialsVolumeName, vol["name"],
 				"git-credentials volume should not exist when secretRef is nil")
+		}
+	})
+
+	t.Run("works in operator-managed mode", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			ConfigMapRef: &clawv1alpha1.AgentFilesConfigMapRef{Name: "dept-files"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		envMap := initConfigEnvMap(objects)
+		assert.Equal(t, "configmap", envMap["AGENT_FILES_SOURCE"])
+		assert.Equal(t, "IfMissing", envMap["AGENT_FILES_APPLY_POLICY"])
+		assert.Empty(t, envMap[ClawConfigManagementEnvVar],
+			"configureAgentFiles should not set management mode")
+	})
+
+	t.Run("works in user-managed mode", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git: &clawv1alpha1.AgentFilesGitSource{
+				URL: "https://github.com/example/agents.git",
+			},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		envMap := initConfigEnvMap(objects)
+		assert.Equal(t, "git", envMap["AGENT_FILES_SOURCE"])
+		assert.Empty(t, envMap[ClawConfigManagementEnvVar],
+			"configureAgentFiles should not set management mode")
+	})
+
+	t.Run("readOnly adds protected-files volume and env var", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git:      &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+			ReadOnly: []string{"SOUL.md", "TOOLS.md"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		envMap := initConfigEnvMap(objects)
+		assert.Equal(t, "SOUL.md,TOOLS.md", envMap["AGENT_FILES_READ_ONLY"])
+
+		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
+		var protectedVol map[string]any
+		for _, v := range volumes {
+			vol := v.(map[string]any)
+			if vol["name"] == protectedFilesVolumeName {
+				protectedVol = vol
+				break
+			}
+		}
+		require.NotNil(t, protectedVol, "protected-files volume should exist")
+		assert.NotNil(t, protectedVol["emptyDir"], "should be an emptyDir volume")
+	})
+
+	t.Run("readOnly mounts files read-only on gateway", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git:      &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+			ReadOnly: []string{"SOUL.md", "TOOLS.md"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		containers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "containers",
+		)
+		gateway := containers[0].(map[string]any)
+		mounts, _, _ := unstructured.NestedSlice(gateway, "volumeMounts")
+
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": workspaceDir + "/SOUL.md",
+			"subPath": "workspace/SOUL.md", "readOnly": true,
+		})
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": workspaceDir + "/TOOLS.md",
+			"subPath": "workspace/TOOLS.md", "readOnly": true,
+		})
+	})
+
+	t.Run("readOnly mounts directories read-only on gateway", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git:      &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+			ReadOnly: []string{"skills/managed/", "skills/locked/**"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		containers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "containers",
+		)
+		gateway := containers[0].(map[string]any)
+		mounts, _, _ := unstructured.NestedSlice(gateway, "volumeMounts")
+
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": workspaceDir + "/skills/managed",
+			"subPath": "workspace/skills/managed", "readOnly": true,
+		})
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": workspaceDir + "/skills/locked",
+			"subPath": "workspace/skills/locked", "readOnly": true,
+		})
+	})
+
+	t.Run("readOnly init-config gets writable emptyDir mount", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git:      &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+			ReadOnly: []string{"SOUL.md"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		initContainers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "initContainers",
+		)
+		initConfig := initContainers[0].(map[string]any)
+		mounts, _, _ := unstructured.NestedSlice(initConfig, "volumeMounts")
+
+		assert.Contains(t, mounts, map[string]any{
+			"name": protectedFilesVolumeName, "mountPath": "/protected-files",
+		})
+	})
+
+	t.Run("no protected-files volume when readOnly is empty", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.AgentFiles = &clawv1alpha1.AgentFilesSpec{
+			Git: &clawv1alpha1.AgentFilesGitSource{URL: "https://github.com/example/agents.git"},
+		}
+
+		require.NoError(t, configureAgentFiles(objects, instance))
+
+		volumes, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "volumes")
+		for _, v := range volumes {
+			vol := v.(map[string]any)
+			assert.NotEqual(t, protectedFilesVolumeName, vol["name"],
+				"protected-files volume should not exist when readOnly is empty")
+		}
+	})
+}
+
+func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
+	t.Run("no-op for operator-managed config", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+
+		envMap := initConfigEnvMap(objects)
+		assert.Empty(t, envMap[ClawConfigManagementEnvVar])
+	})
+
+	t.Run("sets management env and whole-home mount", func(t *testing.T) {
+		objects := makeTestDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
+
+		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
+
+		envMap := initConfigEnvMap(objects)
+		assert.Equal(t, "user", envMap[ClawConfigManagementEnvVar])
+
+		initContainers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "initContainers",
+		)
+		initConfig := initContainers[0].(map[string]any)
+		initMounts, _, _ := unstructured.NestedSlice(initConfig, "volumeMounts")
+		assert.Contains(t, initMounts,
+			map[string]any{"name": "claw-home", "mountPath": "/home/node", "subPath": "home"})
+
+		containers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "containers",
+		)
+		gateway := containers[0].(map[string]any)
+		gatewayMounts, _, _ := unstructured.NestedSlice(gateway, "volumeMounts")
+		assert.Contains(t, gatewayMounts,
+			map[string]any{"name": "claw-home", "mountPath": "/home/node", "subPath": "home"})
+		for _, m := range gatewayMounts {
+			mount := m.(map[string]any)
+			assert.NotEqual(t, "/home/node/.openclaw", mount["mountPath"])
+			assert.NotEqual(t, "/home/node/.local", mount["mountPath"])
 		}
 	})
 }

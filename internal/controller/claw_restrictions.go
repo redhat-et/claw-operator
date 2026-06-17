@@ -141,6 +141,43 @@ func validatePersonaKeys(keys []string) error {
 	return nil
 }
 
+// validateReadOnlyPaths checks that all readOnly entries are safe
+// workspace-relative paths for mounting as read-only overlays.
+func validateReadOnlyPaths(paths []string) error {
+	for _, p := range paths {
+		if p == "" {
+			return fmt.Errorf("readOnly path must not be empty")
+		}
+		if filepath.IsAbs(p) {
+			return fmt.Errorf("readOnly path %q must be relative, not absolute", p)
+		}
+
+		isDirPattern := strings.HasSuffix(p, "/") || strings.HasSuffix(p, "/**")
+		clean := strings.TrimSuffix(strings.TrimSuffix(p, "/**"), "/")
+		if clean == "" {
+			return fmt.Errorf("readOnly path %q resolves to empty after trimming", p)
+		}
+		if strings.Contains(clean, "..") {
+			return fmt.Errorf("readOnly path %q must not contain path traversal", p)
+		}
+		if strings.ContainsAny(clean, "*?[") {
+			return fmt.Errorf("readOnly path %q contains unsupported glob characters", p)
+		}
+		if strings.Contains(clean, ",") {
+			return fmt.Errorf("readOnly path %q must not contain commas", p)
+		}
+		if filepath.Clean(clean) != clean {
+			return fmt.Errorf("readOnly path %q is not a clean path", p)
+		}
+		if isDirPattern && filepath.Ext(clean) != "" {
+			return fmt.Errorf(
+				"readOnly path %q looks like a file but has a directory marker; remove the trailing / or /**", p,
+			)
+		}
+	}
+	return nil
+}
+
 // sortedPersonaKeys returns the data keys from a ConfigMap sorted
 // deterministically. Sorted order ensures stable volume mount ordering
 // across reconcile loops, avoiding unnecessary deployment rollouts.

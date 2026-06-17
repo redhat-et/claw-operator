@@ -36,6 +36,67 @@ data:
             "workspace": "~/.openclaw/workspace"
           }
         ]
+      },
+      "skills": {
+        "entries": {
+          "1password": { "enabled": false },
+          "apple-notes": { "enabled": false },
+          "apple-reminders": { "enabled": false },
+          "bear-notes": { "enabled": false },
+          "blogwatcher": { "enabled": false },
+          "blucli": { "enabled": false },
+          "camsnap": { "enabled": false },
+          "canvas": { "enabled": false },
+          "clawhub": { "enabled": false },
+          "coding-agent": { "enabled": false },
+          "diagram-maker": { "enabled": false },
+          "discord": { "enabled": false },
+          "eightctl": { "enabled": false },
+          "gemini": { "enabled": false },
+          "gh-issues": { "enabled": false },
+          "gifgrep": { "enabled": false },
+          "github": { "enabled": false },
+          "gog": { "enabled": false },
+          "goplaces": { "enabled": false },
+          "healthcheck": { "enabled": false },
+          "himalaya": { "enabled": false },
+          "imsg": { "enabled": false },
+          "mcporter": { "enabled": false },
+          "meme-maker": { "enabled": false },
+          "model-usage": { "enabled": false },
+          "nano-pdf": { "enabled": false },
+          "node-connect": { "enabled": false },
+          "node-inspect-debugger": { "enabled": false },
+          "notion": { "enabled": false },
+          "obsidian": { "enabled": false },
+          "openai-whisper": { "enabled": false },
+          "openai-whisper-api": { "enabled": false },
+          "openhue": { "enabled": false },
+          "oracle": { "enabled": false },
+          "ordercli": { "enabled": false },
+          "peekaboo": { "enabled": false },
+          "python-debugpy": { "enabled": false },
+          "sag": { "enabled": false },
+          "session-logs": { "enabled": false },
+          "sherpa-onnx-tts": { "enabled": false },
+          "skill-creator": { "enabled": false },
+          "slack": { "enabled": false },
+          "songsee": { "enabled": false },
+          "sonoscli": { "enabled": false },
+          "spike": { "enabled": false },
+          "spotify-player": { "enabled": false },
+          "summarize": { "enabled": false },
+          "taskflow": { "enabled": false },
+          "taskflow-inbox-triage": { "enabled": false },
+          "things-mac": { "enabled": false },
+          "tmux": { "enabled": false },
+          "trello": { "enabled": false },
+          "video-frames": { "enabled": false },
+          "voice-call": { "enabled": false },
+          "wacli": { "enabled": false },
+          "weather": { "enabled": false },
+          "xurl": { "enabled": false }
+        }
       }
     }
   merge.js: |
@@ -242,6 +303,56 @@ data:
       }
     }
 
+    function copyTreeAlways(src, dest) {
+      fs.mkdirSync(dest, { recursive: true });
+      for (const entry of fs.readdirSync(src)) {
+        const s = path.join(src, entry);
+        const d = path.join(dest, entry);
+        const stat = fs.lstatSync(s);
+        if (stat.isSymbolicLink()) continue;
+        if (stat.isDirectory()) {
+          copyTreeAlways(s, d);
+        } else {
+          copyAlways(s, d);
+        }
+      }
+    }
+
+    function copyProtectedFiles() {
+      const readOnlyStr = process.env.AGENT_FILES_READ_ONLY || "";
+      if (!readOnlyStr) return;
+      const entries = readOnlyStr.split(",").filter(Boolean);
+      const protectedDir = "/protected-files";
+      const missing = [];
+
+      for (const entry of entries) {
+        const isDir = entry.endsWith("/") || entry.endsWith("/**");
+        const clean = entry.replace(/\/\*\*$/, "").replace(/\/$/, "");
+        const src = path.join(workspaceDir, clean);
+        const dest = path.join(protectedDir, "workspace", clean);
+
+        if (!fs.existsSync(src)) {
+          missing.push(clean);
+          continue;
+        }
+
+        const stat = fs.lstatSync(src);
+        if (stat.isSymbolicLink()) continue;
+        if (isDir && stat.isDirectory()) {
+          copyTreeAlways(src, dest);
+        } else if (stat.isFile()) {
+          copyAlways(src, dest);
+        }
+      }
+      if (missing.length > 0) {
+        throw new Error(
+          "[init-config] readOnly paths not found in workspace: " + missing.join(", ") +
+          ". Check spec.agentFiles.readOnly for typos."
+        );
+      }
+      console.log("[init-config] protected " + entries.length + " read-only entries");
+    }
+
     // Ensure directories exist
     for (const sub of ["workspace", ".local", ".cache", ".config/codex"]) {
       fs.mkdirSync(path.join(pvcDir, sub), { recursive: true });
@@ -292,6 +403,7 @@ data:
     }
 
     seedAgentFiles(agentFilesSourceDir);
+    copyProtectedFiles();
 
     // Seed user-provided workspace files (_ws_* keys) before static seeds
     // so _ws_AGENTS.md takes precedence over the builtin AGENTS.md
@@ -594,7 +706,7 @@ data:
       agent defaults) can be set declaratively via `spec.config.raw` in the CR.
       Non-operator-managed config can also be managed via `openclaw config patch`.
     - **Version override:** `spec.version` overrides the OpenClaw image tag for this
-      instance (e.g., `version: "2026.6.1"`). When omitted, the operator's built-in
+      instance (e.g., `version: "2026.6.8"`). When omitted, the operator's built-in
       default is used. Only the tag is overridden — the image name is fixed. If the
       user asks how to upgrade OpenClaw without rebuilding the operator, this is the
       answer.

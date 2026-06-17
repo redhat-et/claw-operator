@@ -183,6 +183,52 @@ func TestValidatePersonaKeys(t *testing.T) {
 	})
 }
 
+func TestValidateReadOnlyPaths(t *testing.T) {
+	t.Run("valid file paths", func(t *testing.T) {
+		assert.NoError(t, validateReadOnlyPaths([]string{"SOUL.md", "TOOLS.md"}))
+	})
+
+	t.Run("valid directory paths", func(t *testing.T) {
+		assert.NoError(t, validateReadOnlyPaths([]string{"skills/managed/", "skills/managed/**"}))
+	})
+
+	t.Run("valid nested file", func(t *testing.T) {
+		assert.NoError(t, validateReadOnlyPaths([]string{"skills/hr-policy/SKILL.md"}))
+	})
+
+	t.Run("rejects empty path", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{""}))
+	})
+
+	t.Run("rejects absolute path", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{"/etc/passwd"}))
+	})
+
+	t.Run("rejects path traversal", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{"../etc/passwd"}))
+		assert.Error(t, validateReadOnlyPaths([]string{"skills/../../etc"}))
+	})
+
+	t.Run("rejects unsupported globs", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{"*.md"}))
+		assert.Error(t, validateReadOnlyPaths([]string{"skills/*/SKILL.md"}))
+		assert.Error(t, validateReadOnlyPaths([]string{"config[0].json"}))
+	})
+
+	t.Run("rejects bare slash", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{"/"}))
+	})
+
+	t.Run("rejects commas in paths", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{"file,name.md"}))
+	})
+
+	t.Run("rejects directory marker on file-like path", func(t *testing.T) {
+		assert.Error(t, validateReadOnlyPaths([]string{"SOUL.md/"}))
+		assert.Error(t, validateReadOnlyPaths([]string{"skills/hr-policy/SKILL.md/**"}))
+	})
+}
+
 func TestSortedPersonaKeys(t *testing.T) {
 	data := map[string]string{
 		"SOUL.md":   "soul content",
