@@ -256,6 +256,7 @@ jobs:
             echo "PASS: PluginCompatibility condition cleared after version upgrade"
           else
             echo "FAIL: PluginCompatibility condition still present after upgrade (got: '$COND')"
+            kubectl get claw instance-compat -n $NAMESPACE -o yaml
             exit 1
           fi
 
