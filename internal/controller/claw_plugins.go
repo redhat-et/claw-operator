@@ -18,6 +18,7 @@ package controller
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -255,4 +256,73 @@ func pluginsNoProxy(instance *clawv1alpha1.Claw) string {
 		return base + noProxySuffix
 	}
 	return base
+}
+
+// compareCalver compares two calver version strings (e.g. "2026.6.5").
+// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+// The bool is false when either string is malformed (non-numeric segments).
+func compareCalver(a, b string) (int, bool) {
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+
+	maxLen := len(aParts)
+	if len(bParts) > maxLen {
+		maxLen = len(bParts)
+	}
+
+	for i := range maxLen {
+		var aVal, bVal int
+		var err error
+		if i < len(aParts) {
+			aVal, err = strconv.Atoi(aParts[i])
+			if err != nil {
+				return 0, false
+			}
+		}
+		if i < len(bParts) {
+			bVal, err = strconv.Atoi(bParts[i])
+			if err != nil {
+				return 0, false
+			}
+		}
+		if aVal < bVal {
+			return -1, true
+		}
+		if aVal > bVal {
+			return 1, true
+		}
+	}
+	return 0, true
+}
+
+// checkPluginCompatibility checks whether any implicitly required plugin
+// has a minimum version that exceeds spec.version. Returns a warning
+// message or "" if all plugins are compatible.
+func checkPluginCompatibility(instance *clawv1alpha1.Claw) string {
+	if instance.Spec.Version == "" {
+		return ""
+	}
+	for _, cred := range instance.Spec.Credentials {
+		if !usesVertexSDK(cred) {
+			continue
+		}
+		defaults, ok := knownProviders[cred.Provider]
+		if !ok || defaults.VertexPlugin == "" || defaults.PluginMinVersion == "" {
+			continue
+		}
+		cmp, ok := compareCalver(instance.Spec.Version, defaults.PluginMinVersion)
+		if !ok {
+			return fmt.Sprintf(
+				"cannot check plugin compatibility: spec.version %q is not a valid CalVer string",
+				instance.Spec.Version,
+			)
+		}
+		if cmp < 0 {
+			return fmt.Sprintf(
+				"plugin %s requires OpenClaw >= %s, but spec.version is %s",
+				defaults.VertexPlugin, defaults.PluginMinVersion, instance.Spec.Version,
+			)
+		}
+	}
+	return ""
 }

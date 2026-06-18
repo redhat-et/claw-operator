@@ -409,6 +409,7 @@ type ClawResourceReconciler struct {
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -923,6 +924,13 @@ func (r *ClawResourceReconciler) configureDeployments(
 		if err := configureMetricsSidecar(objects, instance, r.OTelCollectorImage); err != nil {
 			return fmt.Errorf("failed to configure metrics sidecar: %w", err)
 		}
+	}
+	if warning := checkPluginCompatibility(instance); warning != "" {
+		setCondition(instance, clawv1alpha1.ConditionTypePluginCompatibility,
+			metav1.ConditionFalse, clawv1alpha1.ConditionReasonIncompatible, warning)
+	} else {
+		meta.RemoveStatusCondition(&instance.Status.Conditions,
+			clawv1alpha1.ConditionTypePluginCompatibility)
 	}
 	if !pluginInstallationDisabled(instance) {
 		plugins := effectivePlugins(instance)
