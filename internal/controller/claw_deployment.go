@@ -593,6 +593,78 @@ func setOrAppendVolume(volumes []any, volume map[string]any) []any {
 	return append(volumes, volume)
 }
 
+// configureSkillImages adds ImageVolume volumes and read-only mounts for each
+// spec.skills.images entry to the gateway container.
+func configureSkillImages(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
+	if instance.Spec.Skills == nil || len(instance.Spec.Skills.Images) == 0 {
+		return nil
+	}
+
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		volumes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "volumes")
+		containers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+
+		gatewayIdx := -1
+		for i, c := range containers {
+			container, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(container, "name")
+			if name == ClawGatewayContainerName {
+				gatewayIdx = i
+				break
+			}
+		}
+		if gatewayIdx < 0 {
+			return fmt.Errorf("container %q not found in claw deployment", ClawGatewayContainerName)
+		}
+
+		gwContainer := containers[gatewayIdx].(map[string]any)
+		mounts, _, _ := unstructured.NestedSlice(gwContainer, "volumeMounts")
+
+		for _, si := range instance.Spec.Skills.Images {
+			volName := "skill-image-" + si.Name
+			imgSpec := map[string]any{
+				"reference": si.Image,
+			}
+			if si.PullPolicy != "" {
+				imgSpec["pullPolicy"] = string(si.PullPolicy)
+			}
+			volumes = setOrAppendVolume(volumes, map[string]any{
+				"name":  volName,
+				"image": imgSpec,
+			})
+			mounts = setOrAppendVolumeMount(mounts, map[string]any{
+				"name":      volName,
+				"mountPath": "/home/node/.openclaw/workspace/skills/" + si.Name,
+				"readOnly":  true,
+			})
+		}
+
+		if err := unstructured.SetNestedSlice(gwContainer, mounts, "volumeMounts"); err != nil {
+			return fmt.Errorf("failed to set volume mounts on gateway container: %w", err)
+		}
+		containers[gatewayIdx] = gwContainer
+		if err := unstructured.SetNestedSlice(
+			obj.Object, containers, "spec", "template", "spec", "containers",
+		); err != nil {
+			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
+		}
+		if err := unstructured.SetNestedSlice(
+			obj.Object, volumes, "spec", "template", "spec", "volumes",
+		); err != nil {
+			return fmt.Errorf("failed to set volumes on claw deployment: %w", err)
+		}
+	}
+	return nil
+}
+
 // configureAgentFiles wires agent file seed sources (ConfigMap or Git) into
 // the init-config container regardless of management mode. merge.js handles
 // agentFiles independently of CLAW_CONFIG_MANAGEMENT, so only the env vars,
