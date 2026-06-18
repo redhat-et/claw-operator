@@ -135,6 +135,125 @@ jobs:
           echo "$CONTAINERS" | grep -q "gateway" || { echo "FAIL: gateway container not found"; exit 1; }
           echo "PASS: gateway container verified"
 
+      - name: Validate VersionDowngrade detection
+        run: |
+          # Simulate a previously-deployed version by writing directly to the status
+          # subresource (bypasses the ready guard so we don't need a real image tag).
+          kubectl patch claw $INSTANCE -n $NAMESPACE --subresource=status \
+            --type=merge -p '{"status":{"lastDeployedVersion":"2026.6.8"}}'
+
+          # Patch spec to a lower version — operator reconciles and should set condition.
+          kubectl patch claw $INSTANCE -n $NAMESPACE \
+            --type=merge -p '{"spec":{"version":"2026.6.5"}}'
+
+          echo "Waiting for VersionDowngrade condition..."
+          for i in $(seq 1 30); do
+            COND=$(kubectl get claw $INSTANCE -n $NAMESPACE \
+              -o 'jsonpath={.status.conditions[?(@.type=="VersionDowngrade")].status}' 2>/dev/null || true)
+            [ "$COND" = "True" ] && break
+            sleep 2
+          done
+
+          COND=$(kubectl get claw $INSTANCE -n $NAMESPACE \
+            -o 'jsonpath={.status.conditions[?(@.type=="VersionDowngrade")].status}' 2>/dev/null || true)
+          if [ "$COND" = "True" ]; then
+            echo "PASS: VersionDowngrade condition detected"
+          else
+            echo "FAIL: VersionDowngrade condition not set (got: '$COND')"
+            exit 1
+          fi
+
+          LAST=$(kubectl get claw $INSTANCE -n $NAMESPACE \
+            -o 'jsonpath={.status.lastDeployedVersion}' 2>/dev/null || true)
+          if [ "$LAST" = "2026.6.8" ]; then
+            echo "PASS: lastDeployedVersion preserved as high-water mark (${LAST})"
+          else
+            echo "FAIL: lastDeployedVersion was overwritten (got: '${LAST}', expected: '2026.6.8')"
+            exit 1
+          fi
+
+          # Restore: clear version so the pod stays on the default image
+          kubectl patch claw $INSTANCE -n $NAMESPACE \
+            --type=json -p '[{"op":"remove","path":"/spec/version"}]' 2>/dev/null || \
+          kubectl patch claw $INSTANCE -n $NAMESPACE \
+            --type=merge -p '{"spec":{"version":null}}'
+
+      - name: Validate PluginCompatibility detection
+        run: |
+          # A minimal fake service-account JSON — the operator mounts it as a
+          # volume; the content is only consumed by the proxy at runtime.
+          kubectl create secret generic fake-gcp-key \
+            --from-literal=sa-key.json='{"type":"service_account","project_id":"test"}' \
+            -n $NAMESPACE
+
+          # Apply a separate Claw with a GCP-type Anthropic credential and a version
+          # below the PluginMinVersion threshold (2026.6.8).
+          # The operator sets PluginCompatibility=False at reconcile time without
+          # needing the pod to start.
+          kubectl apply -n $NAMESPACE -f - <<'EOF'
+          apiVersion: claw.sandbox.redhat.com/v1alpha1
+          kind: Claw
+          metadata:
+            name: instance-compat
+          spec:
+            version: "2026.6.1"
+            credentials:
+              - name: anthropic-vertex
+                type: gcp
+                provider: anthropic
+                secretRef:
+                  - name: fake-gcp-key
+                    key: sa-key.json
+                gcp:
+                  project: test-project
+                  location: us-central1
+          EOF
+
+          echo "Waiting for PluginCompatibility=False condition..."
+          for i in $(seq 1 30); do
+            COND=$(kubectl get claw instance-compat -n $NAMESPACE \
+              -o 'jsonpath={.status.conditions[?(@.type=="PluginCompatibility")].status}' 2>/dev/null || true)
+            [ "$COND" = "False" ] && break
+            sleep 2
+          done
+
+          COND=$(kubectl get claw instance-compat -n $NAMESPACE \
+            -o 'jsonpath={.status.conditions[?(@.type=="PluginCompatibility")].status}' 2>/dev/null || true)
+          MSG=$(kubectl get claw instance-compat -n $NAMESPACE \
+            -o 'jsonpath={.status.conditions[?(@.type=="PluginCompatibility")].message}' 2>/dev/null || true)
+          if [ "$COND" = "False" ]; then
+            echo "PASS: PluginCompatibility=False detected: $MSG"
+          else
+            echo "FAIL: PluginCompatibility condition not set (got: '$COND')"
+            kubectl get claw instance-compat -n $NAMESPACE -o yaml
+            exit 1
+          fi
+
+          # Upgrade version — condition should clear on next reconcile
+          kubectl patch claw instance-compat -n $NAMESPACE \
+            --type=merge -p '{"spec":{"version":"2026.6.8"}}'
+
+          echo "Waiting for PluginCompatibility condition to clear..."
+          for i in $(seq 1 30); do
+            COND=$(kubectl get claw instance-compat -n $NAMESPACE \
+              -o 'jsonpath={.status.conditions[?(@.type=="PluginCompatibility")].status}' 2>/dev/null || true)
+            [ -z "$COND" ] && break
+            sleep 2
+          done
+
+          COND=$(kubectl get claw instance-compat -n $NAMESPACE \
+            -o 'jsonpath={.status.conditions[?(@.type=="PluginCompatibility")].status}' 2>/dev/null || true)
+          if [ -z "$COND" ]; then
+            echo "PASS: PluginCompatibility condition cleared after version upgrade"
+          else
+            echo "FAIL: PluginCompatibility condition still present after upgrade (got: '$COND')"
+            exit 1
+          fi
+
+          # Cleanup
+          kubectl delete claw instance-compat -n $NAMESPACE --ignore-not-found
+          kubectl delete secret fake-gcp-key -n $NAMESPACE --ignore-not-found
+
       - name: Collect debug info on failure
         if: failure()
         run: |
