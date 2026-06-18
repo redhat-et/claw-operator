@@ -36,6 +36,15 @@ jobs:
       CONTAINER_TOOL: docker
       INSTANCE: instance
       NAMESPACE: default
+      # Plugin compatibility test versions.
+      # PLUGIN_MIN_VERSION must match the PluginMinVersion for the Anthropic Vertex
+      # plugin in knownProviders (claw_providers.go).
+      PLUGIN_MIN_VERSION: "2026.6.8"
+      PLUGIN_COMPAT_LOW_VERSION: "2026.6.1"
+      # Version downgrade test: HIGH is recorded as lastDeployedVersion,
+      # LOW triggers the VersionDowngrade condition.
+      VERSION_DOWNGRADE_HIGH: "2026.6.8"
+      VERSION_DOWNGRADE_LOW: "2026.6.5"
     steps:
       - name: Clone the code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -140,11 +149,11 @@ jobs:
           # Simulate a previously-deployed version by writing directly to the status
           # subresource (bypasses the ready guard so we don't need a real image tag).
           kubectl patch claw $INSTANCE -n $NAMESPACE --subresource=status \
-            --type=merge -p '{"status":{"lastDeployedVersion":"2026.6.8"}}'
+            --type=merge -p "{\"status\":{\"lastDeployedVersion\":\"${VERSION_DOWNGRADE_HIGH}\"}}"
 
           # Patch spec to a lower version — operator reconciles and should set condition.
           kubectl patch claw $INSTANCE -n $NAMESPACE \
-            --type=merge -p '{"spec":{"version":"2026.6.5"}}'
+            --type=merge -p "{\"spec\":{\"version\":\"${VERSION_DOWNGRADE_LOW}\"}}"
 
           echo "Waiting for VersionDowngrade condition..."
           for i in $(seq 1 30); do
@@ -165,10 +174,10 @@ jobs:
 
           LAST=$(kubectl get claw $INSTANCE -n $NAMESPACE \
             -o 'jsonpath={.status.lastDeployedVersion}' 2>/dev/null || true)
-          if [ "$LAST" = "2026.6.8" ]; then
+          if [ "$LAST" = "$VERSION_DOWNGRADE_HIGH" ]; then
             echo "PASS: lastDeployedVersion preserved as high-water mark (${LAST})"
           else
-            echo "FAIL: lastDeployedVersion was overwritten (got: '${LAST}', expected: '2026.6.8')"
+            echo "FAIL: lastDeployedVersion was overwritten (got: '${LAST}', expected: '${VERSION_DOWNGRADE_HIGH}')"
             exit 1
           fi
 
@@ -187,16 +196,16 @@ jobs:
             -n $NAMESPACE
 
           # Apply a separate Claw with a GCP-type Anthropic credential and a version
-          # below the PluginMinVersion threshold (2026.6.8).
-          # The operator sets PluginCompatibility=False at reconcile time without
-          # needing the pod to start.
-          kubectl apply -n $NAMESPACE -f - <<'EOF'
+          # below the PluginMinVersion threshold. The operator sets
+          # PluginCompatibility=False at reconcile time without needing the pod to start.
+          # Note: heredoc uses unquoted EOF so env vars expand inside it.
+          kubectl apply -n $NAMESPACE -f - <<EOF
           apiVersion: claw.sandbox.redhat.com/v1alpha1
           kind: Claw
           metadata:
             name: instance-compat
           spec:
-            version: "2026.6.1"
+            version: "${PLUGIN_COMPAT_LOW_VERSION}"
             credentials:
               - name: anthropic-vertex
                 type: gcp
@@ -229,9 +238,9 @@ jobs:
             exit 1
           fi
 
-          # Upgrade version — condition should clear on next reconcile
+          # Upgrade to min version — condition should clear on next reconcile
           kubectl patch claw instance-compat -n $NAMESPACE \
-            --type=merge -p '{"spec":{"version":"2026.6.8"}}'
+            --type=merge -p "{\"spec\":{\"version\":\"${PLUGIN_MIN_VERSION}\"}}"
 
           echo "Waiting for PluginCompatibility condition to clear..."
           for i in $(seq 1 30); do
