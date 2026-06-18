@@ -63,6 +63,11 @@ type providerDefaults struct {
 	// Empty means no plugin is needed (provider is handled natively).
 	VertexPlugin string
 
+	// VertexPluginID is the plugin manifest ID used as the config key
+	// in plugins.entries. Must match the "id" field in the plugin's
+	// manifest. Empty means no config entry is needed.
+	VertexPluginID string
+
 	// Models is the hardcoded model catalog for this provider.
 	// Order matters: the first model becomes the default primary when this
 	// provider is the first configured credential in the Claw CR; remaining
@@ -97,12 +102,13 @@ var knownProviders = map[string]providerDefaults{
 		},
 	},
 	"anthropic": {
-		CredType:     clawv1alpha1.CredentialTypeAPIKey,
-		Domain:       "api.anthropic.com",
-		Header:       "x-api-key",
-		API:          "anthropic-messages",
-		VertexAPI:    "anthropic-messages",
-		VertexPlugin: "@openclaw/anthropic-vertex-provider",
+		CredType:       clawv1alpha1.CredentialTypeAPIKey,
+		Domain:         "api.anthropic.com",
+		Header:         "x-api-key",
+		API:            "anthropic-messages",
+		VertexAPI:      "anthropic-messages",
+		VertexPlugin:   "@openclaw/anthropic-vertex-provider",
+		VertexPluginID: "anthropic-vertex",
 		Models: []modelEntry{
 			{Name: "claude-sonnet-4-6", Alias: "Claude Sonnet 4.6"},
 			{Name: "claude-opus-4-8", Alias: "Claude Opus 4.8"},

@@ -799,6 +799,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	if err := injectProviders(config, instance); err != nil {
 		return fmt.Errorf("failed to inject providers: %w", err)
 	}
+	injectProviderPlugins(config, instance)
 	injectModelCatalog(config, instance)
 	injectMemorySearch(config, instance)
 	if err := injectChannels(config, instance); err != nil {
@@ -923,7 +924,7 @@ func (r *ClawResourceReconciler) configureDeployments(
 			return fmt.Errorf("failed to configure metrics sidecar: %w", err)
 		}
 	}
-	if !userManagedConfig(instance) && !pluginInstallationDisabled(instance) {
+	if !pluginInstallationDisabled(instance) {
 		plugins := effectivePlugins(instance)
 		if len(plugins) > 0 {
 			if err := configurePluginsInitContainer(objects, instance, plugins); err != nil {
