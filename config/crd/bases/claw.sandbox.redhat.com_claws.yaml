@@ -890,6 +890,12 @@ spec:
                       Default: true (plugins are allowed).
                     type: boolean
                 type: object
+              serviceAccountName:
+                description: |-
+                  ServiceAccountName sets the Kubernetes ServiceAccount on the gateway pod.
+                  When set, automountServiceAccountToken is enabled so the SA token is mounted.
+                  When omitted, the default ServiceAccount is used with no token mounted.
+                type: string
               skills:
                 additionalProperties:
                   type: string

@@ -721,6 +721,12 @@ type ClawSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
 	Version string `json:"version,omitempty"`
+
+	// ServiceAccountName sets the Kubernetes ServiceAccount on the gateway pod.
+	// When set, automountServiceAccountToken is enabled so the SA token is mounted.
+	// When omitted, the default ServiceAccount is used with no token mounted.
+	// +optional
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 }
 
 // ClawStatus defines the observed state of Claw
