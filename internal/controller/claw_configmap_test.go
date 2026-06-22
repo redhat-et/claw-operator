@@ -67,7 +67,7 @@ func TestInjectProvidersVertexSDK(t *testing.T) {
 
 		av := providers["anthropic-vertex"].(map[string]any)
 		assert.Equal(t, "https://us-east5-aiplatform.googleapis.com", av["baseUrl"])
-		assert.Equal(t, "gcp-vertex-credentials", av["apiKey"])
+		assert.Equal(t, "ah-ah-ah-you-didnt-say-the-magic-word", av["apiKey"])
 		assert.Equal(t, "anthropic-messages", av["api"])
 		assert.Equal(t, 128000, av["maxTokens"])
 	})
@@ -115,7 +115,7 @@ func TestInjectProvidersVertexSDK(t *testing.T) {
 		require.Contains(t, providers, "meta-vertex")
 		mv := providers["meta-vertex"].(map[string]any)
 		assert.Equal(t, "https://us-central1-aiplatform.googleapis.com", mv["baseUrl"])
-		assert.Equal(t, "gcp-vertex-credentials", mv["apiKey"])
+		assert.Equal(t, "ah-ah-ah-you-didnt-say-the-magic-word", mv["apiKey"])
 		assert.Equal(t, 128000, mv["maxTokens"])
 		assert.NotContains(t, mv, "api", "meta has no VertexAPI in knownProviders")
 	})

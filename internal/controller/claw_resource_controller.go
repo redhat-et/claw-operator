@@ -1297,7 +1297,7 @@ func injectProviders(config map[string]any, instance *clawv1alpha1.Claw) error {
 			}
 			entry := map[string]any{
 				"baseUrl":   vertexAIBaseURL(cred.GCP.Location),
-				"apiKey":    "gcp-vertex-credentials",
+				"apiKey":    "ah-ah-ah-you-didnt-say-the-magic-word",
 				"maxTokens": 128000,
 				"models":    []any{},
 			}
