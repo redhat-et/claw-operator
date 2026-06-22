@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-service
+  namespace: system
+  annotations:
+    # OpenShift service CA operator: injects a TLS serving cert into the Secret named below.
+    # On Kubernetes/Kind without this operator, generate certs manually (see hack/kind-webhook-setup.sh).
+    service.beta.openshift.io/serving-cert-secret-name: webhook-server-cert
+spec:
+  ports:
+  - port: 443
+    protocol: TCP
+    targetPort: 9443
+  selector:
+    control-plane: controller-manager

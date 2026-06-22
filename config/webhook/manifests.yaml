@@ -1,0 +1,60 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutating-webhook-configuration
+  annotations:
+    # OpenShift service CA operator: injects the cluster CA bundle so the API
+    # server can validate the webhook's TLS certificate.
+    # On Kind without this operator, use hack/kind-webhook-setup.sh to inject
+    # the CA bundle manually.
+    service.beta.openshift.io/inject-cabundle: "true"
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-claw-sandbox-redhat-com-v1alpha1-claw
+  failurePolicy: Fail
+  name: mclaw.kb.io
+  rules:
+  - apiGroups:
+    - claw.sandbox.redhat.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - claws
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-claw-sandbox-redhat-com-v1alpha1-claw
+  failurePolicy: Fail
+  name: vclaw.kb.io
+  rules:
+  - apiGroups:
+    - claw.sandbox.redhat.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - claws
+  sideEffects: None
