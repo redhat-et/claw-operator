@@ -71,7 +71,9 @@ func effectivePlugins(instance *clawv1alpha1.Claw) []string {
 }
 
 // requiredProviderPlugins inspects credentials and returns plugin package specs
-// that must be installed for the configured providers to work.
+// that must be installed for the configured providers to work. When spec.version
+// is set, the plugin is pinned to that version so the plugin and gateway stay in
+// lockstep (e.g. "@openclaw/anthropic-vertex-provider@2026.6.8").
 func requiredProviderPlugins(instance *clawv1alpha1.Claw) []string {
 	var plugins []string
 	seen := make(map[string]bool)
@@ -84,7 +86,11 @@ func requiredProviderPlugins(instance *clawv1alpha1.Claw) []string {
 			continue
 		}
 		if !seen[defaults.VertexPlugin] {
-			plugins = append(plugins, defaults.VertexPlugin)
+			spec := defaults.VertexPlugin
+			if instance.Spec.Version != "" {
+				spec += "@" + instance.Spec.Version
+			}
+			plugins = append(plugins, spec)
 			seen[defaults.VertexPlugin] = true
 		}
 	}

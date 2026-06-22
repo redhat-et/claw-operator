@@ -67,7 +67,8 @@ const (
 	ClawConfigManagementEnvVar  = "CLAW_CONFIG_MANAGEMENT"
 	DefaultKubectlImage         = "quay.io/openshift/origin-cli:4.21"
 
-	OpenClawImageBase = "ghcr.io/openclaw/openclaw"
+	OpenClawImageBase      = "ghcr.io/openclaw/openclaw"
+	DefaultOpenClawVersion = "2026.6.8"
 
 	// OpenClaw JSON config keys shared across enrichment functions
 	configKeyGateway   = "gateway"
@@ -443,6 +444,10 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		logger.Error(err, "Failed to get Claw")
 		return ctrl.Result{}, err
+	}
+
+	if instance.Spec.Version == "" {
+		instance.Spec.Version = DefaultOpenClawVersion
 	}
 
 	// Short-circuit when idled — scale deployments to zero and return
