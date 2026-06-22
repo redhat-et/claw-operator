@@ -56,7 +56,14 @@ jobs:
           kind version
 
       - name: Create Kind cluster
-        run: kind create cluster --name $KIND_CLUSTER
+        run: |
+          cat <<EOF | kind create cluster --name $KIND_CLUSTER --config=-
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+          - role: control-plane
+            image: kindest/node:v1.35.0@sha256:986401fce0e567a9860075ba9df8c8459bd99a35f79024d8a682773fb40f0753
+          EOF
 
       - name: Build and load operator images
         run: |
@@ -85,13 +92,23 @@ jobs:
             --timeout=2m
           kubectl get pods -n claw-operator
 
-      - name: Create credential secret and Claw CR
+      - name: Build and load skill OCI image into Kind
+        run: |
+          docker build -t example.com/e2e-skill:latest test/e2e/testdata/skill-image/
+          kind load docker-image example.com/e2e-skill:latest --name $KIND_CLUSTER
+
+      - name: Create credential secret, skill ConfigMap, and Claw CR with all three skill types
         run: |
           kubectl create secret generic gemini-api-key \
             --from-literal=api-key=test-api-key-value \
             -n $NAMESPACE
           kubectl label secret gemini-api-key \
             claw.sandbox.redhat.com/instance=$INSTANCE \
+            -n $NAMESPACE
+
+          kubectl create configmap corp-skills \
+            --from-literal=sales-playbook='# Sales Playbook\nFollow the enterprise sales process.' \
+            --from-literal=onboarding='# Onboarding\nWelcome new hires to the team.' \
             -n $NAMESPACE
 
           kubectl apply -n $NAMESPACE -f - <<'EOF'
@@ -109,12 +126,26 @@ jobs:
                 domain: ".googleapis.com"
                 apiKey:
                   header: x-goog-api-key
+            skills:
+              content:
+                greeting: |
+                  ---
+                  name: greeting
+                  description: A simple greeting skill
+                  ---
+                  Greet the user warmly.
+              images:
+                - name: oci-skill
+                  image: example.com/e2e-skill:latest
+                  pullPolicy: IfNotPresent
+              configMaps:
+                - name: corp-skills
           EOF
 
       - name: Wait for Claw Ready
         run: |
           echo "Waiting for Claw Ready condition..."
-          for i in $(seq 1 90); do
+          for i in $(seq 1 150); do
             STATUS=$(kubectl get claw $INSTANCE -n $NAMESPACE \
               -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
             if [ "$STATUS" = "True" ]; then
@@ -123,7 +154,7 @@ jobs:
             fi
             sleep 2
           done
-          echo "ERROR: Claw did not become Ready within 3 minutes"
+          echo "ERROR: Claw did not become Ready within 5 minutes"
           kubectl get claw $INSTANCE -n $NAMESPACE -o yaml
           exit 1
 
@@ -134,6 +165,46 @@ jobs:
           echo "Containers: $CONTAINERS"
           echo "$CONTAINERS" | grep -q "gateway" || { echo "FAIL: gateway container not found"; exit 1; }
           echo "PASS: gateway container verified"
+
+      - name: Validate all three skill delivery mechanisms
+        run: |
+          # Get the running gateway pod name
+          POD=$(kubectl get pods -l "claw.sandbox.redhat.com/instance=$INSTANCE" \
+            -n $NAMESPACE -o jsonpath='{.items[0].metadata.name}')
+          echo "Validating skills in pod: $POD"
+          FAIL=0
+
+          # 1. content skill: greeting/SKILL.md written by merge.js from _skill_greeting ConfigMap key
+          if kubectl exec "$POD" -n $NAMESPACE -c gateway -- \
+              grep -q "Greet the user warmly" \
+              /home/node/.openclaw/workspace/skills/greeting/SKILL.md 2>/dev/null; then
+            echo "PASS: content skill greeting/SKILL.md present with correct content"
+          else
+            echo "FAIL: content skill greeting/SKILL.md missing or wrong content"
+            FAIL=1
+          fi
+
+          # 2. configMaps skills: sales-playbook and onboarding written by merge.js
+          for SKILL in sales-playbook onboarding; do
+            if kubectl exec "$POD" -n $NAMESPACE -c gateway -- \
+                test -f "/home/node/.openclaw/workspace/skills/${SKILL}/SKILL.md" 2>/dev/null; then
+              echo "PASS: configMap skill ${SKILL}/SKILL.md present"
+            else
+              echo "FAIL: configMap skill ${SKILL}/SKILL.md missing"
+              FAIL=1
+            fi
+          done
+
+          # 3. images skill: oci-skill mounted directly via ImageVolume
+          if kubectl exec "$POD" -n $NAMESPACE -c gateway -- \
+              test -f /home/node/.openclaw/workspace/skills/oci-skill/SKILL.md 2>/dev/null; then
+            echo "PASS: image skill oci-skill/SKILL.md present"
+          else
+            echo "FAIL: image skill oci-skill/SKILL.md missing"
+            FAIL=1
+          fi
+
+          exit $FAIL
 
       - name: Collect debug info on failure
         if: failure()

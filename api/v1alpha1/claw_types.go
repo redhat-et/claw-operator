@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -635,6 +636,58 @@ type CustomProviderSpec struct {
 	Models []CustomModelEntry `json:"models"`
 }
 
+// SkillImageSpec declares an OCI image to mount as a read-only skill directory.
+type SkillImageSpec struct {
+	// Name is the skill directory name under workspace/skills/.
+	// Must be a valid directory component: no "/", no "..", no "--",
+	// and must not conflict with builtin skills (platform, kubernetes)
+	// or names in spec.skills.content.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`
+	Name string `json:"name"`
+
+	// Image is the OCI image reference (tag or digest).
+	// +kubebuilder:validation:MinLength=1
+	Image string `json:"image"`
+
+	// PullPolicy defines when the kubelet pulls the skill image.
+	// Defaults to Always if tag is :latest, IfNotPresent otherwise.
+	// +optional
+	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
+	PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`
+}
+
+// SkillConfigMapRef references a ConfigMap whose keys become skill names
+// and values become SKILL.md content.
+type SkillConfigMapRef struct {
+	// Name is the ConfigMap name in the same namespace as the Claw instance.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+}
+
+// SkillsSpec configures skill delivery for the OpenClaw instance.
+type SkillsSpec struct {
+	// Content maps skill names to SKILL.md content. Each entry creates
+	// workspace/skills/<name>/SKILL.md, overwritten on every pod restart
+	// (operator-managed).
+	// +optional
+	Content map[string]string `json:"content,omitempty"`
+
+	// Images declares OCI images mounted as read-only skill directories.
+	// Each image is mounted at workspace/skills/<name>/ via Kubernetes ImageVolume.
+	// Requires Kubernetes 1.31+ with the ImageVolume feature gate enabled.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Images []SkillImageSpec `json:"images,omitempty"`
+
+	// ConfigMaps references ConfigMaps whose keys become skill names and
+	// values become SKILL.md content. Each key creates
+	// workspace/skills/<key>/SKILL.md. Subject to the 1 MiB ConfigMap limit.
+	// +optional
+	ConfigMaps []SkillConfigMapRef `json:"configMaps,omitempty"`
+}
+
 // ClawSpec defines the desired state of Claw
 type ClawSpec struct {
 	// Config provides user-supplied OpenClaw configuration and merge behavior.
@@ -701,11 +754,9 @@ type ClawSpec struct {
 	// +optional
 	AgentFiles *AgentFilesSpec `json:"agentFiles,omitempty"`
 
-	// Skills maps skill names to SKILL.md content. Each entry creates
-	// workspace/skills/<name>/SKILL.md, overwritten on every pod restart
-	// (operator-managed).
+	// Skills configures skill delivery: inline content, OCI images, and ConfigMap refs.
 	// +optional
-	Skills map[string]string `json:"skills,omitempty"`
+	Skills *SkillsSpec `json:"skills,omitempty"`
 
 	// Restrictions configures runtime restrictions that limit agent and
 	// user capabilities. Use for regulated environments where behavioral

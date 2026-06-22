@@ -103,9 +103,10 @@ spec:
       name: %s
       key: agentfiles.tgz
   skills:
-    compliance: |
-      # Compliance
-      This CR-provided skill should not be injected in user-managed mode.
+    content:
+      compliance: |
+        # Compliance
+        This CR-provided skill should not be injected in user-managed mode.
   plugins:
     - "@openclaw/matrix"
 `, secretName, secretKey, agentFilesConfigMap)
@@ -760,6 +761,126 @@ func TestManager(t *testing.T) { //nolint:gocyclo
 			output, err = utils.Run(t, cmd)
 			require.NoError(t, err)
 			assert.Contains(t, output, "user-managed OpenClaw instance")
+		})
+
+		t.Run("should deliver skills from content, images, and configMaps", func(t *testing.T) {
+			const skillConfigMapName = "e2e-corp-skills"
+
+			t.Cleanup(func() {
+				collectDebugInfo(t)
+				cmd := exec.Command("kubectl", "delete", "claw", "instance", "-n", userNamespace)
+				_, _ = utils.Run(t, cmd)
+				cmd = exec.Command("kubectl", "delete", "secret", "gemini-api-key", "-n", userNamespace)
+				_, _ = utils.Run(t, cmd)
+				cmd = exec.Command("kubectl", "delete", "configmap", skillConfigMapName, "-n", userNamespace)
+				_, _ = utils.Run(t, cmd)
+				require.NoError(t, waitForPVCDeletion(t), "PVC deletion timed out")
+			})
+
+			t.Log("creating the credential Secret")
+			cmd := exec.Command("kubectl", "delete", "secret", "gemini-api-key",
+				"-n", userNamespace, "--ignore-not-found")
+			_, _ = utils.Run(t, cmd)
+			createLabeledSecret(t, "gemini-api-key",
+				"--from-literal=api-key=test-api-key-value")
+
+			t.Log("creating the skill ConfigMap")
+			cmd = exec.Command("kubectl", "create", "configmap", skillConfigMapName,
+				"--from-literal=onboarding=# Onboarding\nWelcome new hires.",
+				"-n", userNamespace)
+			_, err = utils.Run(t, cmd)
+			require.NoError(t, err, "Failed to create skill ConfigMap")
+
+			t.Log("applying Claw CR with all three skill types")
+			crYAML := fmt.Sprintf(`apiVersion: claw.sandbox.redhat.com/v1alpha1
+kind: Claw
+metadata:
+  name: instance
+spec:
+  credentials:
+    - name: gemini
+      type: apiKey
+      secretRef:
+        - name: gemini-api-key
+          key: api-key
+      provider: google
+  skills:
+    content:
+      greeting: |
+        ---
+        name: greeting
+        description: A test greeting skill
+        ---
+        Greet the user warmly.
+    images:
+      - name: oci-skill
+        image: %s
+    configMaps:
+      - name: %s
+`, skillImage, skillConfigMapName)
+			crFile := filepath.Join("/tmp", "claw-e2e-skills.yaml")
+			err = os.WriteFile(crFile, []byte(crYAML), os.FileMode(0o644))
+			require.NoError(t, err)
+			cmd = exec.Command("kubectl", "apply", "-f", crFile, "-n", userNamespace)
+			_, err = utils.Run(t, cmd)
+			require.NoError(t, err, "Failed to apply Claw CR with skills")
+
+			t.Log("waiting for Claw ProxyConfigured condition")
+			ctx := context.Background()
+			err = wait.PollUntilContextTimeout(ctx, pollInterval, defaultTimeout, true,
+				func(ctx context.Context) (bool, error) {
+					cmd := exec.Command("kubectl", "get", "claw", "instance",
+						"-o", "jsonpath={.status.conditions[?(@.type=='ProxyConfigured')].status}",
+						"-n", userNamespace)
+					output, err := utils.Run(t, cmd)
+					return err == nil && output == conditionTrue, nil
+				})
+			require.NoError(t, err, "Claw ProxyConfigured did not become True")
+
+			t.Log("verifying inline content skill in ConfigMap")
+			cmd = exec.Command("kubectl", "get", "configmap", configMapName,
+				"-o", "jsonpath={.data._skill_greeting}",
+				"-n", userNamespace)
+			output, err := utils.Run(t, cmd)
+			require.NoError(t, err)
+			assert.Contains(t, output, "Greet the user warmly",
+				"_skill_greeting should contain inline skill content")
+
+			t.Log("verifying ConfigMap-sourced skill in ConfigMap")
+			cmd = exec.Command("kubectl", "get", "configmap", configMapName,
+				"-o", "jsonpath={.data._skill_onboarding}",
+				"-n", userNamespace)
+			output, err = utils.Run(t, cmd)
+			require.NoError(t, err)
+			assert.Contains(t, output, "Onboarding",
+				"_skill_onboarding should contain content from the referenced ConfigMap")
+
+			t.Log("verifying ImageVolume for OCI skill on gateway deployment")
+			volJP := `jsonpath={.spec.template.spec.volumes[?(@.name=="skill-image-oci-skill")].image.reference}`
+			cmd = exec.Command("kubectl", "get", "deployment", clawInstanceName,
+				"-o", volJP, "-n", userNamespace)
+			output, err = utils.Run(t, cmd)
+			require.NoError(t, err)
+			assert.Equal(t, skillImage, output,
+				"ImageVolume should reference the skill image")
+
+			mountJP := `jsonpath={.spec.template.spec.containers[?(@.name=="gateway")]` +
+				`.volumeMounts[?(@.name=="skill-image-oci-skill")].mountPath}`
+			cmd = exec.Command("kubectl", "get", "deployment", clawInstanceName,
+				"-o", mountJP, "-n", userNamespace)
+			output, err = utils.Run(t, cmd)
+			require.NoError(t, err)
+			assert.Equal(t, "/home/node/.openclaw/workspace/skills/oci-skill", output,
+				"Skill image should be mounted at the correct skill path")
+
+			mountROJP := `jsonpath={.spec.template.spec.containers[?(@.name=="gateway")]` +
+				`.volumeMounts[?(@.name=="skill-image-oci-skill")].readOnly}`
+			cmd = exec.Command("kubectl", "get", "deployment", clawInstanceName,
+				"-o", mountROJP, "-n", userNamespace)
+			output, err = utils.Run(t, cmd)
+			require.NoError(t, err)
+			assert.Equal(t, "true", output,
+				"Skill image mount should be readOnly")
 		})
 
 		t.Run("should wire credential env var with correct Secret reference", func(t *testing.T) {

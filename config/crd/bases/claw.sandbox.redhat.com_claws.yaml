@@ -891,12 +891,75 @@ spec:
                     type: boolean
                 type: object
               skills:
-                additionalProperties:
-                  type: string
-                description: |-
-                  Skills maps skill names to SKILL.md content. Each entry creates
-                  workspace/skills/<name>/SKILL.md, overwritten on every pod restart
-                  (operator-managed).
+                description: 'Skills configures skill delivery: inline content, OCI
+                  images, and ConfigMap refs.'
+                properties:
+                  configMaps:
+                    description: |-
+                      ConfigMaps references ConfigMaps whose keys become skill names and
+                      values become SKILL.md content. Each key creates
+                      workspace/skills/<key>/SKILL.md. Subject to the 1 MiB ConfigMap limit.
+                    items:
+                      description: |-
+                        SkillConfigMapRef references a ConfigMap whose keys become skill names
+                        and values become SKILL.md content.
+                      properties:
+                        name:
+                          description: Name is the ConfigMap name in the same namespace
+                            as the Claw instance.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  content:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Content maps skill names to SKILL.md content. Each entry creates
+                      workspace/skills/<name>/SKILL.md, overwritten on every pod restart
+                      (operator-managed).
+                    type: object
+                  images:
+                    description: |-
+                      Images declares OCI images mounted as read-only skill directories.
+                      Each image is mounted at workspace/skills/<name>/ via Kubernetes ImageVolume.
+                      Requires Kubernetes 1.31+ with the ImageVolume feature gate enabled.
+                    items:
+                      description: SkillImageSpec declares an OCI image to mount as
+                        a read-only skill directory.
+                      properties:
+                        image:
+                          description: Image is the OCI image reference (tag or digest).
+                          minLength: 1
+                          type: string
+                        name:
+                          description: |-
+                            Name is the skill directory name under workspace/skills/.
+                            Must be a valid directory component: no "/", no "..", no "--",
+                            and must not conflict with builtin skills (platform, kubernetes)
+                            or names in spec.skills.content.
+                          minLength: 1
+                          pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                          type: string
+                        pullPolicy:
+                          description: |-
+                            PullPolicy defines when the kubelet pulls the skill image.
+                            Defaults to Always if tag is :latest, IfNotPresent otherwise.
+                          enum:
+                          - Always
+                          - IfNotPresent
+                          - Never
+                          type: string
+                      required:
+                      - image
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                 type: object
               version:
                 description: |-
