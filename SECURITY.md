@@ -1,8 +1,7 @@
 # Security Policy
 
 This document describes how to report vulnerabilities, how they are triaged and disclosed,
-and what security practices claw-operator follows. For the full system threat model, see
-[THREAT_MODEL.md](THREAT_MODEL.md).
+and what security practices claw-operator follows.
 
 ---
 
