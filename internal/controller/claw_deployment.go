@@ -889,6 +889,76 @@ func configureReadOnlyMounts(obj *unstructured.Unstructured, readOnly []string) 
 // merge.js) and whole-home PVC mount on both init-config and gateway containers.
 // This function is temporary — it will be removed when merge.js derives behavior
 // from file-level signals instead of a mode flag (design doc step 6).
+// configureGatewayWholeHomeMount ensures the gateway and init-config containers
+// mount the PVC at /home/node (not /home/node/.openclaw) so that paths are
+// consistent with the init-plugins container, which always mounts at /home/node.
+func configureGatewayWholeHomeMount(objects []*unstructured.Unstructured, instanceName string) error {
+	gatewayName := getClawDeploymentName(instanceName)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		initContainers, found, err := unstructured.NestedSlice(
+			obj.Object, "spec", "template", "spec", "initContainers",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to get init containers from claw deployment: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("initContainers field not found in claw deployment")
+		}
+		for i, ic := range initContainers {
+			container, ok := ic.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(container, "name")
+			if name != ClawInitConfigContainerName {
+				continue
+			}
+			if err := configureWholeHomeMount(container); err != nil {
+				return fmt.Errorf("failed to configure init-config home mount: %w", err)
+			}
+			initContainers[i] = container
+		}
+		if err := unstructured.SetNestedSlice(
+			obj.Object, initContainers, "spec", "template", "spec", "initContainers",
+		); err != nil {
+			return fmt.Errorf("failed to set init containers on claw deployment: %w", err)
+		}
+
+		containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+		if err != nil {
+			return fmt.Errorf("failed to get containers from claw deployment: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("containers field not found in claw deployment")
+		}
+		for i, c := range containers {
+			container, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(container, "name")
+			if name != ClawGatewayContainerName {
+				continue
+			}
+			if err := configureWholeHomeMount(container); err != nil {
+				return fmt.Errorf("failed to configure gateway home mount: %w", err)
+			}
+			containers[i] = container
+		}
+		if err := unstructured.SetNestedSlice(
+			obj.Object, containers, "spec", "template", "spec", "containers",
+		); err != nil {
+			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("claw deployment not found in manifests")
+}
+
 func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
 	if !userManagedConfig(instance) {
 		return nil
@@ -926,9 +996,6 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 			if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
 				return fmt.Errorf("failed to set init-config env vars: %w", err)
 			}
-			if err := configureWholeHomeMount(container); err != nil {
-				return fmt.Errorf("failed to configure init-config home mount: %w", err)
-			}
 			initContainers[i] = container
 		}
 		if !initConfigFound {
@@ -938,38 +1005,6 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 			obj.Object, initContainers, "spec", "template", "spec", "initContainers",
 		); err != nil {
 			return fmt.Errorf("failed to set init containers on claw deployment: %w", err)
-		}
-
-		containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
-		if err != nil {
-			return fmt.Errorf("failed to get containers from claw deployment: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("containers field not found in claw deployment")
-		}
-		gatewayFound := false
-		for i, c := range containers {
-			container, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, _, _ := unstructured.NestedString(container, "name")
-			if name != ClawGatewayContainerName {
-				continue
-			}
-			gatewayFound = true
-			if err := configureWholeHomeMount(container); err != nil {
-				return fmt.Errorf("failed to configure gateway home mount: %w", err)
-			}
-			containers[i] = container
-		}
-		if !gatewayFound {
-			return fmt.Errorf("container %q not found in claw deployment", ClawGatewayContainerName)
-		}
-		if err := unstructured.SetNestedSlice(
-			obj.Object, containers, "spec", "template", "spec", "containers",
-		); err != nil {
-			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
 		}
 		return nil
 	}
