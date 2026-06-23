@@ -537,6 +537,17 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	// Validate skills (images, configMaps, cross-field collision with inline content)
+	if err := validateSkills(instance); err != nil {
+		logger.Error(err, "Skills validation failed")
+		setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after skills validation failure")
+		}
+		return ctrl.Result{}, err
+	}
+
 	// Generate proxy config, apply ConfigMaps (proxy config + Vertex AI stub ADC)
 	proxyConfigJSON, err := r.applyProxyResources(ctx, instance, resolvedCreds)
 	if err != nil {
@@ -650,7 +661,7 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Phase 3: Inject Route host into ConfigMap and apply remaining resources
-	if err := r.enrichConfigAndNetworkPolicy(objects, routeHost, instance, resolvedCreds); err != nil {
+	if err := r.enrichConfigAndNetworkPolicy(ctx, objects, routeHost, instance, resolvedCreds); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -762,6 +773,7 @@ func (r *ClawResourceReconciler) resolveAndApplyCredentials(ctx context.Context,
 // merges user config from spec.config.raw, runs the three-tier enrichment
 // pipeline, writes the result back, and updates the NetworkPolicy.
 func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
+	ctx context.Context,
 	objects []*unstructured.Unstructured,
 	routeHost string,
 	instance *clawv1alpha1.Claw,
@@ -832,6 +844,9 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 		if err := injectSkillFiles(objects, instance); err != nil {
 			return fmt.Errorf("failed to inject skill files: %w", err)
 		}
+		if err := r.injectSkillConfigMapFiles(ctx, objects, instance); err != nil {
+			return fmt.Errorf("failed to inject skill configMap files: %w", err)
+		}
 		if err := injectKubernetesSkill(objects, resolvedCreds, instance.Name); err != nil {
 			return fmt.Errorf("failed to inject Kubernetes skill: %w", err)
 		}
@@ -873,7 +888,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 }
 
 // findObject locates an unstructured object by kind and name.
-func findObject(objects []*unstructured.Unstructured, kind, name string) (*unstructured.Unstructured, error) {
+func findObject(objects []*unstructured.Unstructured, kind, name string) (*unstructured.Unstructured, error) { //nolint:unparam
 	for _, obj := range objects {
 		if obj.GetKind() == kind && obj.GetName() == name {
 			return obj, nil
@@ -943,6 +958,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	if err := configureAgentFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure agent files: %w", err)
 	}
+	if err := configureSkillImages(objects, instance); err != nil {
+		return fmt.Errorf("failed to configure skill images: %w", err)
+	}
 	if err := configureUserManagedOpenClawFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure user-managed OpenClaw files: %w", err)
 	}
@@ -954,6 +972,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	}
 	if err := configureImagePullPolicy(objects, r.ImagePullPolicy); err != nil {
 		return fmt.Errorf("failed to configure image pull policy: %w", err)
+	}
+	if err := configureClawDeploymentServiceAccount(objects, instance); err != nil {
+		return fmt.Errorf("failed to configure service account: %w", err)
 	}
 	return nil
 }
