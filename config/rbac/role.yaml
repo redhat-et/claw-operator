@@ -27,12 +27,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods/exec
-  verbs:
-  - create
-- apiGroups:
-  - ""
-  resources:
   - serviceaccounts
   - services
   verbs:
@@ -119,6 +113,7 @@ rules:
   resources:
   - clusterroles
   verbs:
+  - bind
   - delete
   - get
 - apiGroups:

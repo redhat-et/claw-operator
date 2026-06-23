@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -263,6 +264,8 @@ func main() {
 		KubectlImage:       os.Getenv("KUBECTL_IMAGE"),
 		OTelCollectorImage: os.Getenv("OTEL_COLLECTOR_IMAGE"),
 		ImagePullPolicy:    imagePullPolicy,
+		OperatorNamespace:  getOperatorNamespace(),
+		OperatorSAName:     os.Getenv("OPERATOR_SA_NAME"),
 		MetricsRefreshed:   make(chan struct{}),
 	}
 	if err = clawReconciler.SetupWithManager(mgr); err != nil {
@@ -319,6 +322,16 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func getOperatorNamespace() string {
+	if ns := os.Getenv("OPERATOR_NAMESPACE"); ns != "" {
+		return ns
+	}
+	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	return "claw-operator-system"
 }
 
 var validImagePullPolicies = map[string]bool{
