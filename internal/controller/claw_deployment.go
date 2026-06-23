@@ -1365,3 +1365,28 @@ func (r *ClawResourceReconciler) validateGitSecretRef(
 	}
 	return nil
 }
+
+func configureClawDeploymentServiceAccount(
+	objects []*unstructured.Unstructured,
+	instance *clawv1alpha1.Claw,
+) error {
+	if instance.Spec.ServiceAccountName == "" {
+		return nil
+	}
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+		if err := unstructured.SetNestedField(obj.Object, instance.Spec.ServiceAccountName,
+			"spec", "template", "spec", "serviceAccountName"); err != nil {
+			return fmt.Errorf("failed to set serviceAccountName: %w", err)
+		}
+		if err := unstructured.SetNestedField(obj.Object, true,
+			"spec", "template", "spec", "automountServiceAccountToken"); err != nil {
+			return fmt.Errorf("failed to set automountServiceAccountToken: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("claw deployment not found in manifests")
+}
