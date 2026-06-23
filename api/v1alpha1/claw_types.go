@@ -655,6 +655,14 @@ type SkillImageSpec struct {
 	// +optional
 	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
 	PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`
+
+	// ImagePullSecrets is a list of references to Secrets in the same namespace
+	// used to pull this OCI skill image from a private registry.
+	// Merged into the gateway pod's imagePullSecrets at reconcile time.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
 // SkillConfigMapRef references a ConfigMap whose keys become skill names

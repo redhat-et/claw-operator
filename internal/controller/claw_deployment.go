@@ -628,6 +628,18 @@ func configureSkillImages(objects []*unstructured.Unstructured, instance *clawv1
 		gwContainer := containers[gatewayIdx].(map[string]any)
 		mounts, _, _ := unstructured.NestedSlice(gwContainer, "volumeMounts")
 
+		pullSecretsSeen := map[string]bool{}
+		var pullSecrets []any
+		existing, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "imagePullSecrets")
+		for _, e := range existing {
+			if ref, ok := e.(map[string]any); ok {
+				if n, _, _ := unstructured.NestedString(ref, "name"); n != "" {
+					pullSecretsSeen[n] = true
+					pullSecrets = append(pullSecrets, ref)
+				}
+			}
+		}
+
 		for _, si := range instance.Spec.Skills.Images {
 			volName := "skill-image-" + si.Name
 			imgSpec := map[string]any{
@@ -645,6 +657,12 @@ func configureSkillImages(objects []*unstructured.Unstructured, instance *clawv1
 				"mountPath": "/home/node/.openclaw/workspace/skills/" + si.Name,
 				"readOnly":  true,
 			})
+			for _, ps := range si.ImagePullSecrets {
+				if !pullSecretsSeen[ps.Name] {
+					pullSecretsSeen[ps.Name] = true
+					pullSecrets = append(pullSecrets, map[string]any{"name": ps.Name})
+				}
+			}
 		}
 
 		if err := unstructured.SetNestedSlice(gwContainer, mounts, "volumeMounts"); err != nil {
@@ -660,6 +678,13 @@ func configureSkillImages(objects []*unstructured.Unstructured, instance *clawv1
 			obj.Object, volumes, "spec", "template", "spec", "volumes",
 		); err != nil {
 			return fmt.Errorf("failed to set volumes on claw deployment: %w", err)
+		}
+		if len(pullSecrets) > 0 {
+			if err := unstructured.SetNestedSlice(
+				obj.Object, pullSecrets, "spec", "template", "spec", "imagePullSecrets",
+			); err != nil {
+				return fmt.Errorf("failed to set imagePullSecrets on claw deployment: %w", err)
+			}
 		}
 	}
 	return nil
