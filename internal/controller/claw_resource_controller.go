@@ -465,6 +465,12 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to clean up device-pairing resources: %w", err)
 	}
 
+	// Create or update a namespace-scoped RoleBinding that grants pods/exec only in this namespace.
+	// This replaces the former cluster-wide pods/exec ClusterRole permission.
+	if err := r.reconcileExecRoleBinding(ctx, instance); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile exec RoleBinding: %w", err)
+	}
+
 	// Create or update the gateway Secret with token
 	if err := r.applyGatewaySecret(ctx, instance); err != nil {
 		logger.Error(err, "Failed to apply gateway secret")
