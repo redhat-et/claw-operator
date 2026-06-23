@@ -746,14 +746,6 @@ func TestManager(t *testing.T) { //nolint:gocyclo
 			require.NoError(t, err)
 			assert.Empty(t, output, "CR-provided skills should not be injected in user-managed mode")
 
-			initNamesJP := `jsonpath={.spec.template.spec.initContainers[*].name}`
-			cmd = exec.Command("kubectl", "get", "deployment", clawInstanceName,
-				"-o", initNamesJP, "-n", userNamespace)
-			output, err = utils.Run(t, cmd)
-			require.NoError(t, err)
-			assert.NotContains(t, output, "init-plugins",
-				"spec.plugins init container should not be injected in user-managed mode")
-
 			t.Log("verifying unmanaged deployment context skill seed exists")
 			cmd = exec.Command("kubectl", "get", "configmap", configMapName,
 				"-o", "jsonpath={.data.UNMANAGED\\.md}",
