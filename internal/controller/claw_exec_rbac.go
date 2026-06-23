@@ -23,6 +23,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	clawv1alpha1 "github.com/codeready-toolchain/claw-operator/api/v1alpha1"
 )
@@ -40,6 +41,7 @@ const ExecClusterRoleName = "claw-operator-exec-role"
 // If OperatorSAName or OperatorNamespace is not configured, the function is a no-op.
 func (r *ClawResourceReconciler) reconcileExecRoleBinding(ctx context.Context, instance *clawv1alpha1.Claw) error {
 	if r.OperatorSAName == "" || r.OperatorNamespace == "" {
+		log.FromContext(ctx).Info("skipping exec RoleBinding: operator SA identity not configured")
 		return nil
 	}
 
