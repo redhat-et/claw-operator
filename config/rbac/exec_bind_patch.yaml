@@ -11,8 +11,9 @@
     resources:
     - clusterroles
     # resourceNames must match the kustomize-prefixed ClusterRole name.
-    # If namePrefix changes from "claw-operator-", update this value and
-    # EXEC_CLUSTER_ROLE_NAME in config/manager/manager.yaml to match.
+    # If namePrefix changes from "claw-operator-", update this value,
+    # EXEC_CLUSTER_ROLE_NAME in config/manager/manager.yaml, and
+    # DefaultExecClusterRoleName in internal/controller/claw_exec_rbac.go to match.
     resourceNames:
     - claw-operator-exec-role
     verbs:

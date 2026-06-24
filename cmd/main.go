@@ -268,7 +268,7 @@ func main() {
 		ImagePullPolicy:     imagePullPolicy,
 		OperatorNamespace:   getOperatorNamespace(),
 		OperatorSAName:      getOperatorSAName(),
-		ExecClusterRoleName: os.Getenv("EXEC_CLUSTER_ROLE_NAME"),
+		ExecClusterRoleName: getEnvOrDefault("EXEC_CLUSTER_ROLE_NAME", controller.DefaultExecClusterRoleName),
 		MetricsRefreshed:    make(chan struct{}),
 	}
 	setupLog.Info("operator identity resolved",
@@ -355,6 +355,15 @@ func getOperatorSAName() string {
 		}
 	}
 	return "claw-operator-controller-manager"
+}
+
+// getEnvOrDefault returns the value of the environment variable named by key, or defaultVal
+// if the variable is unset or empty.
+func getEnvOrDefault(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultVal
 }
 
 // saNameFromToken extracts the service account name from a Kubernetes bound SA JWT token

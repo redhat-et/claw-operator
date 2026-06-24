@@ -469,6 +469,11 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Create or update a namespace-scoped RoleBinding that grants pods/exec only in this namespace.
 	// This replaces the former cluster-wide pods/exec ClusterRole permission.
 	if err := r.reconcileExecRoleBinding(ctx, instance); err != nil {
+		setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after exec RoleBinding failure")
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile exec RoleBinding: %w", err)
 	}
 

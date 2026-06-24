@@ -33,11 +33,12 @@ func TestReconcileExecRoleBinding(t *testing.T) {
 		createClawInstance(t, ctx, testInstanceName, namespace)
 
 		reconciler := &ClawResourceReconciler{
-			Client:            k8sClient,
-			Scheme:            scheme.Scheme,
-			UserSecretReader:  k8sClient,
-			OperatorNamespace: "test-operator-ns",
-			OperatorSAName:    "test-operator-sa",
+			Client:              k8sClient,
+			Scheme:              scheme.Scheme,
+			UserSecretReader:    k8sClient,
+			OperatorNamespace:   "test-operator-ns",
+			OperatorSAName:      "test-operator-sa",
+			ExecClusterRoleName: DefaultExecClusterRoleName,
 		}
 		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
 
@@ -48,7 +49,7 @@ func TestReconcileExecRoleBinding(t *testing.T) {
 		}, "exec RoleBinding should be created")
 
 		assert.Equal(t, "ClusterRole", rb.RoleRef.Kind)
-		assert.Equal(t, defaultExecClusterRoleName, rb.RoleRef.Name)
+		assert.Equal(t, DefaultExecClusterRoleName, rb.RoleRef.Name)
 		require.Len(t, rb.Subjects, 1)
 		assert.Equal(t, rbacv1.ServiceAccountKind, rb.Subjects[0].Kind)
 		assert.Equal(t, "test-operator-sa", rb.Subjects[0].Name)
@@ -61,11 +62,12 @@ func TestReconcileExecRoleBinding(t *testing.T) {
 		createClawInstance(t, ctx, testInstanceName, namespace)
 
 		reconciler := &ClawResourceReconciler{
-			Client:            k8sClient,
-			Scheme:            scheme.Scheme,
-			UserSecretReader:  k8sClient,
-			OperatorNamespace: "test-operator-ns",
-			OperatorSAName:    "test-operator-sa",
+			Client:              k8sClient,
+			Scheme:              scheme.Scheme,
+			UserSecretReader:    k8sClient,
+			OperatorNamespace:   "test-operator-ns",
+			OperatorSAName:      "test-operator-sa",
+			ExecClusterRoleName: DefaultExecClusterRoleName,
 		}
 		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
 
