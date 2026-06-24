@@ -37,44 +37,6 @@ import (
 	clawv1alpha1 "github.com/codeready-toolchain/claw-operator/api/v1alpha1"
 )
 
-func makeTestDeploymentForMetrics() []*unstructured.Unstructured {
-	dep := &unstructured.Unstructured{}
-	dep.SetKind(DeploymentKind)
-	dep.SetName(getClawDeploymentName(testInstanceName))
-	dep.Object["spec"] = map[string]any{
-		"template": map[string]any{
-			"spec": map[string]any{
-				"containers": []any{
-					map[string]any{
-						"name":         ClawGatewayContainerName,
-						"env":          []any{},
-						"volumeMounts": []any{},
-					},
-				},
-				"volumes": []any{
-					map[string]any{
-						"name": "config",
-						"configMap": map[string]any{
-							"name": getConfigMapName(testInstanceName),
-						},
-					},
-				},
-			},
-		},
-	}
-	return []*unstructured.Unstructured{dep}
-}
-
-func makeTestConfigMapForMetrics() *unstructured.Unstructured {
-	cm := &unstructured.Unstructured{}
-	cm.SetKind(ConfigMapKind)
-	cm.SetName(getConfigMapName(testInstanceName))
-	cm.Object["data"] = map[string]any{
-		"operator.json": `{"gateway":{}}`,
-	}
-	return cm
-}
-
 func makeTestServiceForMetrics() *unstructured.Unstructured {
 	svc := &unstructured.Unstructured{}
 	svc.SetKind(ServiceKind)

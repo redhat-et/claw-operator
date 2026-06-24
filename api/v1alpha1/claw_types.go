@@ -730,8 +730,8 @@ type SkillsSpec struct {
 }
 
 // ClawSpec defines the desired state of Claw
-// +kubebuilder:validation:XValidation:rule=”!has(self.traces) || !self.traces.enabled || self.traces.endpoint != ””,message=”spec.traces.endpoint is required when spec.traces.enabled is true”
-// +kubebuilder:validation:XValidation:rule=”!has(self.logs) || !self.logs.enabled || self.logs.endpoint != ” || (has(self.traces) && self.traces.endpoint != ”)”,message=”spec.logs requires either spec.logs.endpoint or spec.traces.endpoint when enabled”
+// +kubebuilder:validation:XValidation:rule=”!has(self.traces) || !self.traces.enabled || size(self.traces.endpoint) > 0”,message=”spec.traces.endpoint is required when spec.traces.enabled is true”
+// +kubebuilder:validation:XValidation:rule=”!has(self.logs) || !self.logs.enabled || size(self.logs.endpoint) > 0 || (has(self.traces) && size(self.traces.endpoint) > 0)”,message=”spec.logs requires either spec.logs.endpoint or spec.traces.endpoint when enabled”
 type ClawSpec struct {
 	// Config provides user-supplied OpenClaw configuration and merge behavior.
 	// +optional
