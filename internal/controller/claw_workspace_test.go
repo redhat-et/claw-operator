@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -186,6 +187,236 @@ func TestValidateSkillNames(t *testing.T) {
 	})
 }
 
+// --- validateSkillImages tests ---
+
+func TestValidateSkillImages(t *testing.T) {
+	t.Run("should accept valid skill images", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "openshift-review", Image: "quay.io/corp/openshift-review:1.0.0"},
+			{Name: "sales-playbook", Image: "quay.io/corp/sales-playbook:2.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("should accept nil slice", func(t *testing.T) {
+		err := validateSkillImages(nil, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("should accept empty slice", func(t *testing.T) {
+		err := validateSkillImages([]clawv1alpha1.SkillImageSpec{}, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("should reject empty name", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "", Image: "quay.io/corp/skill:1.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not be empty")
+	})
+
+	t.Run("should reject dot name", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: ".", Image: "quay.io/corp/skill:1.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `must not be "."`)
+	})
+
+	t.Run("should reject dot-dot name", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "..", Image: "quay.io/corp/skill:1.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `must not be ".."`)
+	})
+
+	t.Run("should reject name with slash", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "my/skill", Image: "quay.io/corp/skill:1.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `must not contain "/"`)
+	})
+
+	t.Run("should reject name with -- delimiter", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "my--skill", Image: "quay.io/corp/skill:1.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "reserved as path encoding delimiter")
+	})
+
+	t.Run("should reject builtin platform name", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "platform", Image: "quay.io/corp/skill:1.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with builtin operator skill")
+	})
+
+	t.Run("should reject builtin kubernetes name", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "kubernetes", Image: "quay.io/corp/skill:1.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with builtin operator skill")
+	})
+
+	t.Run("should reject duplicate names within images", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "my-skill", Image: "quay.io/corp/skill:1.0.0"},
+			{Name: "my-skill", Image: "quay.io/corp/skill:2.0.0"},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate skill image name")
+	})
+
+	t.Run("should reject name collision with content skills", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "my-skill", Image: "quay.io/corp/skill:1.0.0"},
+		}
+		allNames := map[string]string{"my-skill": "spec.skills.content"}
+		err := validateSkillImages(images, allNames)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with spec.skills.content entry")
+	})
+
+	t.Run("should reject empty image reference", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{Name: "my-skill", Image: ""},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has empty image reference")
+	})
+
+	t.Run("should reject empty imagePullSecret name", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{
+				Name:  "my-skill",
+				Image: "quay.io/corp/skill:1.0.0",
+				ImagePullSecrets: []corev1.LocalObjectReference{
+					{Name: ""},
+				},
+			},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "imagePullSecret with empty name")
+	})
+}
+
+// --- validateSkills tests ---
+
+func TestValidateSkills(t *testing.T) {
+	t.Run("should accept nil skills", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{Spec: clawv1alpha1.ClawSpec{}}
+		assert.NoError(t, validateSkills(instance))
+	})
+
+	t.Run("should accept all three sources without collision", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Skills: &clawv1alpha1.SkillsSpec{
+					Content: map[string]string{"inline-skill": "content"},
+					Images: []clawv1alpha1.SkillImageSpec{
+						{Name: "image-skill", Image: "quay.io/test:1.0"},
+					},
+					ConfigMaps: []clawv1alpha1.SkillConfigMapRef{
+						{Name: "my-configmap"},
+					},
+				},
+			},
+		}
+		assert.NoError(t, validateSkills(instance))
+	})
+
+	t.Run("should reject content-image collision", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Skills: &clawv1alpha1.SkillsSpec{
+					Content: map[string]string{"collision": "content"},
+					Images: []clawv1alpha1.SkillImageSpec{
+						{Name: "collision", Image: "quay.io/test:1.0"},
+					},
+				},
+			},
+		}
+		err := validateSkills(instance)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with spec.skills.content entry")
+	})
+
+	t.Run("should reject duplicate configMap refs", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Skills: &clawv1alpha1.SkillsSpec{
+					ConfigMaps: []clawv1alpha1.SkillConfigMapRef{
+						{Name: "cm1"},
+						{Name: "cm1"},
+					},
+				},
+			},
+		}
+		err := validateSkills(instance)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate skill configMap ref")
+	})
+
+	t.Run("should reject empty configMap ref name", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Skills: &clawv1alpha1.SkillsSpec{
+					ConfigMaps: []clawv1alpha1.SkillConfigMapRef{
+						{Name: ""},
+					},
+				},
+			},
+		}
+		err := validateSkills(instance)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not be empty")
+	})
+}
+
+// --- validateSkillConfigMaps tests ---
+
+func TestValidateSkillConfigMaps(t *testing.T) {
+	t.Run("should accept nil refs", func(t *testing.T) {
+		assert.NoError(t, validateSkillConfigMaps(nil))
+	})
+
+	t.Run("should accept valid refs", func(t *testing.T) {
+		refs := []clawv1alpha1.SkillConfigMapRef{{Name: "cm1"}, {Name: "cm2"}}
+		assert.NoError(t, validateSkillConfigMaps(refs))
+	})
+
+	t.Run("should reject empty name", func(t *testing.T) {
+		refs := []clawv1alpha1.SkillConfigMapRef{{Name: ""}}
+		err := validateSkillConfigMaps(refs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not be empty")
+	})
+
+	t.Run("should reject duplicate refs", func(t *testing.T) {
+		refs := []clawv1alpha1.SkillConfigMapRef{{Name: "cm1"}, {Name: "cm1"}}
+		err := validateSkillConfigMaps(refs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate skill configMap ref")
+	})
+}
+
 // --- injectWorkspaceFiles tests ---
 
 func TestInjectWorkspaceFiles(t *testing.T) {
@@ -302,9 +533,11 @@ func TestInjectSkillFiles(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName},
 			Spec: clawv1alpha1.ClawSpec{
-				Skills: map[string]string{
-					"quote-builder": "# Quote Builder\nUse pricing API...",
-					"compliance":    "# Compliance\nFollow policy...",
+				Skills: &clawv1alpha1.SkillsSpec{
+					Content: map[string]string{
+						"quote-builder": "# Quote Builder\nUse pricing API...",
+						"compliance":    "# Compliance\nFollow policy...",
+					},
 				},
 			},
 		}
@@ -325,8 +558,10 @@ func TestInjectSkillFiles(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName},
 			Spec: clawv1alpha1.ClawSpec{
-				Skills: map[string]string{
-					"platform": "should fail",
+				Skills: &clawv1alpha1.SkillsSpec{
+					Content: map[string]string{
+						"platform": "should fail",
+					},
 				},
 			},
 		}
@@ -426,8 +661,10 @@ func TestWorkspaceIntegration(t *testing.T) {
 						"IDENTITY.md": "# Identity\nName: Test User",
 					},
 				},
-				Skills: map[string]string{
-					"quote-builder": "# Quote Builder\nBuild quotes...",
+				Skills: &clawv1alpha1.SkillsSpec{
+					Content: map[string]string{
+						"quote-builder": "# Quote Builder\nBuild quotes...",
+					},
 				},
 			},
 		}
@@ -545,8 +782,10 @@ func TestWorkspaceIntegration(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
 			Spec: clawv1alpha1.ClawSpec{
 				Credentials: testCredentials(),
-				Skills: map[string]string{
-					"platform": "should not be allowed",
+				Skills: &clawv1alpha1.SkillsSpec{
+					Content: map[string]string{
+						"platform": "should not be allowed",
+					},
 				},
 			},
 		}
@@ -565,5 +804,210 @@ func TestWorkspaceIntegration(t *testing.T) {
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "conflicts with builtin operator skill")
+	})
+}
+
+// --- SkillImages integration tests ---
+
+func TestSkillImagesIntegration(t *testing.T) {
+	t.Run("should reconcile successfully with skillImages set", func(t *testing.T) {
+		ctx := context.Background()
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: testCredentials(),
+				Skills: &clawv1alpha1.SkillsSpec{
+					Images: []clawv1alpha1.SkillImageSpec{
+						{Name: "openshift-review", Image: "quay.io/corp/openshift-review:1.0.0"},
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		// Verify the Deployment was created (reconciliation did not error).
+		// ImageVolume content assertions are in unit tests (TestConfigureSkillImages)
+		// because envtest strips image volume sources that require feature gates.
+		var dep appsv1.Deployment
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{
+			Name:      getClawDeploymentName(testInstanceName),
+			Namespace: namespace,
+		}, &dep))
+	})
+
+	t.Run("should fail reconcile when skill image name collides with inline skill", func(t *testing.T) {
+		ctx := context.Background()
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: testCredentials(),
+				Skills: &clawv1alpha1.SkillsSpec{
+					Content: map[string]string{"my-skill": "content"},
+					Images: []clawv1alpha1.SkillImageSpec{
+						{Name: "my-skill", Image: "quay.io/corp/my-skill:1.0.0"},
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		reconciler := createClawReconciler()
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: client.ObjectKey{
+				Name:      testInstanceName,
+				Namespace: namespace,
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with spec.skills.content entry")
+	})
+}
+
+// --- SkillConfigMaps integration tests ---
+
+func TestSkillConfigMapsIntegration(t *testing.T) {
+	t.Run("should inject skills from referenced ConfigMap after reconcile", func(t *testing.T) {
+		ctx := context.Background()
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		skillCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "corp-skills", Namespace: namespace},
+			Data: map[string]string{
+				"sales-playbook": "# Sales Playbook\nFollow the process...",
+				"onboarding":     "# Onboarding\nWelcome new hires...",
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, skillCM))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: testCredentials(),
+				Skills: &clawv1alpha1.SkillsSpec{
+					ConfigMaps: []clawv1alpha1.SkillConfigMapRef{
+						{Name: "corp-skills"},
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		var cm corev1.ConfigMap
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{
+			Name:      getConfigMapName(testInstanceName),
+			Namespace: namespace,
+		}, &cm))
+
+		assert.Equal(t, "# Sales Playbook\nFollow the process...", cm.Data["_skill_sales-playbook"],
+			"sales-playbook skill should be present in gateway ConfigMap")
+		assert.Equal(t, "# Onboarding\nWelcome new hires...", cm.Data["_skill_onboarding"],
+			"onboarding skill should be present in gateway ConfigMap")
+	})
+
+	t.Run("should fail reconcile when referenced ConfigMap does not exist", func(t *testing.T) {
+		ctx := context.Background()
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: testCredentials(),
+				Skills: &clawv1alpha1.SkillsSpec{
+					ConfigMaps: []clawv1alpha1.SkillConfigMapRef{
+						{Name: "nonexistent-cm"},
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		reconciler := createClawReconciler()
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: client.ObjectKey{
+				Name:      testInstanceName,
+				Namespace: namespace,
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get skill ConfigMap")
+	})
+
+	t.Run("should fail when ConfigMap key collides with inline content skill", func(t *testing.T) {
+		ctx := context.Background()
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		skillCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "collision-skills", Namespace: namespace},
+			Data: map[string]string{
+				"my-skill": "# From ConfigMap",
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, skillCM))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: testCredentials(),
+				Skills: &clawv1alpha1.SkillsSpec{
+					Content: map[string]string{
+						"my-skill": "# From Content",
+					},
+					ConfigMaps: []clawv1alpha1.SkillConfigMapRef{
+						{Name: "collision-skills"},
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		reconciler := createClawReconciler()
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: client.ObjectKey{
+				Name:      testInstanceName,
+				Namespace: namespace,
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "conflicts with spec.skills.content entry")
 	})
 }

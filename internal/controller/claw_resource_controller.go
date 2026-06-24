@@ -67,7 +67,8 @@ const (
 	ClawConfigManagementEnvVar  = "CLAW_CONFIG_MANAGEMENT"
 	DefaultKubectlImage         = "quay.io/openshift/origin-cli:4.21"
 
-	OpenClawImageBase = "ghcr.io/openclaw/openclaw"
+	OpenClawImageBase      = "ghcr.io/openclaw/openclaw"
+	DefaultOpenClawVersion = "2026.6.10"
 
 	// OpenClaw JSON config keys shared across enrichment functions
 	configKeyGateway   = "gateway"
@@ -392,11 +393,10 @@ type ClawResourceReconciler struct {
 	// UserSecretReader reads user-owned Secrets directly from the API server,
 	// bypassing the informer cache (where Transform has stripped .Data).
 	// Operator-owned Secrets keep full .Data in cache and use r.Get().
-	UserSecretReader   client.Reader
-	ProxyImage         string
-	KubectlImage       string
-	OTelCollectorImage string
-	ImagePullPolicy    string
+	UserSecretReader client.Reader
+	ProxyImage       string
+	KubectlImage     string
+	ImagePullPolicy  string
 	// MetricsRefreshed is closed by Start() after the initial metrics refresh.
 	// Reconcile() waits on it so no reconciliation runs before metrics are populated.
 	MetricsRefreshed chan struct{}
@@ -409,6 +409,7 @@ type ClawResourceReconciler struct {
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -442,6 +443,10 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		logger.Error(err, "Failed to get Claw")
 		return ctrl.Result{}, err
+	}
+
+	if instance.Spec.Version == "" {
+		instance.Spec.Version = DefaultOpenClawVersion
 	}
 
 	// Short-circuit when idled — scale deployments to zero and return
@@ -532,6 +537,17 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
 		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
 			logger.Error(statusErr, "Failed to update status after git secret validation failure")
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Validate skills (images, configMaps, cross-field collision with inline content)
+	if err := validateSkills(instance); err != nil {
+		logger.Error(err, "Skills validation failed")
+		setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after skills validation failure")
 		}
 		return ctrl.Result{}, err
 	}
@@ -649,7 +665,7 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Phase 3: Inject Route host into ConfigMap and apply remaining resources
-	if err := r.enrichConfigAndNetworkPolicy(objects, routeHost, instance, resolvedCreds); err != nil {
+	if err := r.enrichConfigAndNetworkPolicy(ctx, objects, routeHost, instance, resolvedCreds); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -761,6 +777,7 @@ func (r *ClawResourceReconciler) resolveAndApplyCredentials(ctx context.Context,
 // merges user config from spec.config.raw, runs the three-tier enrichment
 // pipeline, writes the result back, and updates the NetworkPolicy.
 func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
+	ctx context.Context,
 	objects []*unstructured.Unstructured,
 	routeHost string,
 	instance *clawv1alpha1.Claw,
@@ -799,6 +816,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	if err := injectProviders(config, instance); err != nil {
 		return fmt.Errorf("failed to inject providers: %w", err)
 	}
+	injectProviderPlugins(config, instance)
 	injectModelCatalog(config, instance)
 	injectMemorySearch(config, instance)
 	if err := injectChannels(config, instance); err != nil {
@@ -830,6 +848,9 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	if !userManagedConfig(instance) {
 		if err := injectSkillFiles(objects, instance); err != nil {
 			return fmt.Errorf("failed to inject skill files: %w", err)
+		}
+		if err := r.injectSkillConfigMapFiles(ctx, objects, instance); err != nil {
+			return fmt.Errorf("failed to inject skill configMap files: %w", err)
 		}
 		if err := injectKubernetesSkill(objects, resolvedCreds, instance.Name); err != nil {
 			return fmt.Errorf("failed to inject Kubernetes skill: %w", err)
@@ -864,7 +885,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 }
 
 // findObject locates an unstructured object by kind and name.
-func findObject(objects []*unstructured.Unstructured, kind, name string) (*unstructured.Unstructured, error) {
+func findObject(objects []*unstructured.Unstructured, kind, name string) (*unstructured.Unstructured, error) { //nolint:unparam
 	for _, obj := range objects {
 		if obj.GetKind() == kind && obj.GetName() == name {
 			return obj, nil
@@ -911,15 +932,19 @@ func (r *ClawResourceReconciler) configureDeployments(
 	if err := configureClawDeploymentForAuth(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure gateway for auth: %w", err)
 	}
-	if otelSidecarNeeded(instance) {
-		if err := configureMetricsSidecar(objects, instance, r.OTelCollectorImage); err != nil {
-			return fmt.Errorf("failed to configure OTel sidecar: %w", err)
-		}
+	if tracesEnabled(instance) || logsEnabled(instance) || metricsEnabled(instance) {
 		if err := injectOTelEnvVars(objects, instance); err != nil {
 			return fmt.Errorf("failed to inject OTel env vars: %w", err)
 		}
 	}
-	if !userManagedConfig(instance) && !pluginInstallationDisabled(instance) {
+	if warning := checkPluginCompatibility(instance); warning != "" {
+		setCondition(instance, clawv1alpha1.ConditionTypePluginCompatibility,
+			metav1.ConditionFalse, clawv1alpha1.ConditionReasonIncompatible, warning)
+	} else {
+		meta.RemoveStatusCondition(&instance.Status.Conditions,
+			clawv1alpha1.ConditionTypePluginCompatibility)
+	}
+	if !pluginInstallationDisabled(instance) {
 		plugins := effectivePlugins(instance)
 		if len(plugins) > 0 {
 			if err := configurePluginsInitContainer(objects, instance, plugins); err != nil {
@@ -929,6 +954,12 @@ func (r *ClawResourceReconciler) configureDeployments(
 	}
 	if err := configureAgentFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure agent files: %w", err)
+	}
+	if err := configureSkillImages(objects, instance); err != nil {
+		return fmt.Errorf("failed to configure skill images: %w", err)
+	}
+	if err := configureGatewayWholeHomeMount(objects, instance.Name); err != nil {
+		return fmt.Errorf("failed to configure gateway home mount: %w", err)
 	}
 	if err := configureUserManagedOpenClawFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure user-managed OpenClaw files: %w", err)
@@ -941,6 +972,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	}
 	if err := configureImagePullPolicy(objects, r.ImagePullPolicy); err != nil {
 		return fmt.Errorf("failed to configure image pull policy: %w", err)
+	}
+	if err := configureClawDeploymentServiceAccount(objects, instance); err != nil {
+		return fmt.Errorf("failed to configure service account: %w", err)
 	}
 	return nil
 }
@@ -1263,7 +1297,7 @@ func injectProviders(config map[string]any, instance *clawv1alpha1.Claw) error {
 			}
 			entry := map[string]any{
 				"baseUrl":   vertexAIBaseURL(cred.GCP.Location),
-				"apiKey":    "gcp-vertex-credentials",
+				"apiKey":    "ah-ah-ah-you-didnt-say-the-magic-word",
 				"maxTokens": 128000,
 				"models":    []any{},
 			}

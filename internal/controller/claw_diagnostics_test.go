@@ -58,7 +58,6 @@ func TestTracesAndLogsHelpers(t *testing.T) {
 		assert.Equal(t, "", tracesEndpoint(instance))
 		assert.Equal(t, "", logsEndpoint(instance))
 		assert.Equal(t, "1", tracesSamplingRatio(instance))
-		assert.False(t, otelSidecarNeeded(instance))
 	})
 
 	t.Run("traces enabled", func(t *testing.T) {
@@ -67,7 +66,6 @@ func TestTracesAndLogsHelpers(t *testing.T) {
 		assert.False(t, logsEnabled(instance))
 		assert.Equal(t, "http://collector.obs.svc:4318", tracesEndpoint(instance))
 		assert.Equal(t, "http://collector.obs.svc:4318", logsEndpoint(instance))
-		assert.True(t, otelSidecarNeeded(instance))
 	})
 
 	t.Run("logs enabled with own endpoint", func(t *testing.T) {
@@ -93,20 +91,6 @@ func TestTracesAndLogsHelpers(t *testing.T) {
 		assert.Equal(t, "0.1", tracesSamplingRatio(instance))
 	})
 
-	t.Run("otelSidecarNeeded with metrics only", func(t *testing.T) {
-		instance := testClawWithMetrics(true, nil)
-		assert.True(t, otelSidecarNeeded(instance))
-	})
-
-	t.Run("otelSidecarNeeded with traces only", func(t *testing.T) {
-		instance := testClawWithTraces("", "")
-		assert.True(t, otelSidecarNeeded(instance))
-	})
-
-	t.Run("otelSidecarNeeded with neither", func(t *testing.T) {
-		instance := &clawv1alpha1.Claw{}
-		assert.False(t, otelSidecarNeeded(instance))
-	})
 }
 
 func TestInjectDiagnosticsConfig(t *testing.T) {
@@ -119,7 +103,7 @@ func TestInjectDiagnosticsConfig(t *testing.T) {
 		diag := config["diagnostics"].(map[string]any)
 		otel := diag["otel"].(map[string]any)
 		assert.Equal(t, true, otel["traces"])
-		assert.Equal(t, "http://localhost:4318", otel["endpoint"])
+		assert.Equal(t, "http://collector:4318", otel["endpoint"])
 		_, hasLogs := otel["logs"]
 		assert.False(t, hasLogs)
 	})

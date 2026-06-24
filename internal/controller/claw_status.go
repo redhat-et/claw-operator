@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -171,6 +172,81 @@ func setReadyCondition(instance *clawv1alpha1.Claw, ready bool, pendingDeploymen
 	})
 }
 
+// setReadyConditionWithDetail sets the Ready condition, enriching the message
+// with init container failure details when available.
+func setReadyConditionWithDetail(
+	instance *clawv1alpha1.Claw,
+	ready bool,
+	pendingDeployments []string,
+	initFailureDetail string,
+) {
+	if ready || initFailureDetail == "" {
+		setReadyCondition(instance, ready, pendingDeployments)
+		return
+	}
+
+	meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+		Type:               clawv1alpha1.ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             clawv1alpha1.ConditionReasonInitContainerFailure,
+		Message:            initFailureDetail,
+		ObservedGeneration: instance.Generation,
+	})
+}
+
+// checkPodInitFailures inspects pods owned by the named Deployment for
+// init container failures (non-zero exit or CrashLoopBackOff). Returns
+// a human-readable description or "" if no failures are found.
+func (r *ClawResourceReconciler) checkPodInitFailures(
+	ctx context.Context,
+	namespace, deploymentName string,
+) (string, error) {
+	deployment := &appsv1.Deployment{}
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: namespace, Name: deploymentName,
+	}, deployment); err != nil {
+		return "", fmt.Errorf("get deployment %s: %w", deploymentName, err)
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
+	if err != nil {
+		return "", fmt.Errorf("build selector for %s: %w", deploymentName, err)
+	}
+
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods,
+		client.InNamespace(namespace),
+		client.MatchingLabelsSelector{Selector: selector},
+	); err != nil {
+		return "", fmt.Errorf("list pods for %s: %w", deploymentName, err)
+	}
+
+	var failures []string
+	for i := range pods.Items {
+		for _, cs := range pods.Items[i].Status.InitContainerStatuses {
+			if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+				msg := t.Reason
+				if t.Message != "" {
+					msg = t.Message
+				}
+				failures = append(failures, fmt.Sprintf(
+					"init container %q failed (exit %d): %s",
+					cs.Name, t.ExitCode, msg))
+			} else if w := cs.State.Waiting; w != nil &&
+				w.Reason == "CrashLoopBackOff" {
+				failures = append(failures, fmt.Sprintf(
+					"init container %q in CrashLoopBackOff: %s",
+					cs.Name, w.Message))
+			}
+		}
+	}
+
+	if len(failures) == 0 {
+		return "", nil
+	}
+	return strings.Join(failures, "; "), nil
+}
+
 // getGatewayToken fetches the gateway token from the gateway token Secret and Base64-decodes it.
 // Returns the token string, or empty string if the Secret cannot be read.
 func (r *ClawResourceReconciler) getGatewayToken(ctx context.Context, namespace, instanceName string) string {
@@ -224,8 +300,25 @@ func (r *ClawResourceReconciler) updateStatus(ctx context.Context, instance *cla
 		return fmt.Errorf("failed to check deployment readiness: %w", err)
 	}
 
-	// Set Ready condition
-	setReadyCondition(instance, ready, pending)
+	// When deployments are not ready, inspect pods for init container failures
+	logger := log.FromContext(ctx)
+	var initFailureDetail string
+	if !ready {
+		for _, depName := range pending {
+			detail, err := r.checkPodInitFailures(ctx, instance.Namespace, depName)
+			if err != nil {
+				logger.Error(err, "failed to inspect init container failures", "deployment", depName)
+				continue
+			}
+			if detail != "" {
+				initFailureDetail = detail
+				break
+			}
+		}
+	}
+
+	// Set Ready condition (with init failure detail if available)
+	setReadyConditionWithDetail(instance, ready, pending, initFailureDetail)
 
 	// Expose gateway secret name in status
 	instance.Status.GatewayTokenSecretRef = getGatewaySecretName(instance.Name)
@@ -251,6 +344,34 @@ func (r *ClawResourceReconciler) updateStatus(ctx context.Context, instance *cla
 		// Clear URLs when deployments are not ready
 		instance.Status.URL = "" //nolint:staticcheck // deprecated but still populated
 		instance.Status.GatewayURL = ""
+	}
+
+	// Version downgrade detection
+	cmp, cmpOK := compareCalver(instance.Spec.Version, instance.Status.LastDeployedVersion)
+	if instance.Spec.Version != "" &&
+		instance.Status.LastDeployedVersion != "" &&
+		cmpOK && cmp < 0 {
+		setCondition(instance,
+			clawv1alpha1.ConditionTypeVersionDowngrade,
+			metav1.ConditionTrue,
+			clawv1alpha1.ConditionReasonVersionDowngrade,
+			fmt.Sprintf(
+				"spec.version %s is older than previously deployed version %s; "+
+					"PVC data may be incompatible",
+				instance.Spec.Version, instance.Status.LastDeployedVersion),
+		)
+	} else {
+		meta.RemoveStatusCondition(&instance.Status.Conditions,
+			clawv1alpha1.ConditionTypeVersionDowngrade)
+	}
+
+	// Track last deployed version when ready (high-water mark: only update upward
+	// so that a downgrade preserves the previous version for comparison)
+	if ready && instance.Spec.Version != "" {
+		cmpTrack, cmpTrackOK := compareCalver(instance.Spec.Version, instance.Status.LastDeployedVersion)
+		if instance.Status.LastDeployedVersion == "" || !cmpTrackOK || cmpTrack >= 0 {
+			instance.Status.LastDeployedVersion = instance.Spec.Version
+		}
 	}
 
 	recordClawMetrics(instance)

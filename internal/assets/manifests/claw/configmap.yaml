@@ -366,7 +366,8 @@ data:
     let seedConfig = seed;
     const agentFilesConfigPath = agentFilesSourceDir ? path.join(agentFilesSourceDir, "openclaw.json") : "";
     if (agentFilesConfigPath && fs.existsSync(agentFilesConfigPath)) {
-      seedConfig = JSON.parse(fs.readFileSync(agentFilesConfigPath, "utf8"));
+      const agentFilesSeed = JSON.parse(fs.readFileSync(agentFilesConfigPath, "utf8"));
+      seedConfig = deepMerge(seed, agentFilesSeed);
     }
 
     if (management === "user" && fs.existsSync(pvcPath)) {

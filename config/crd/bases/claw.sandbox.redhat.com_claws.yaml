@@ -904,13 +904,109 @@ spec:
                       Default: true (plugins are allowed).
                     type: boolean
                 type: object
-              skills:
-                additionalProperties:
-                  type: string
+              serviceAccountName:
                 description: |-
-                  Skills maps skill names to SKILL.md content. Each entry creates
-                  workspace/skills/<name>/SKILL.md, overwritten on every pod restart
-                  (operator-managed).
+                  ServiceAccountName sets the Kubernetes ServiceAccount on the gateway pod.
+                  When set, automountServiceAccountToken is enabled so the SA token is mounted.
+                  When omitted, the default ServiceAccount is used with no token mounted.
+                type: string
+              skills:
+                description: 'Skills configures skill delivery: inline content, OCI
+                  images, and ConfigMap refs.'
+                properties:
+                  configMaps:
+                    description: |-
+                      ConfigMaps references ConfigMaps whose keys become skill names and
+                      values become SKILL.md content. Each key creates
+                      workspace/skills/<key>/SKILL.md. Subject to the 1 MiB ConfigMap limit.
+                    items:
+                      description: |-
+                        SkillConfigMapRef references a ConfigMap whose keys become skill names
+                        and values become SKILL.md content.
+                      properties:
+                        name:
+                          description: Name is the ConfigMap name in the same namespace
+                            as the Claw instance.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  content:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Content maps skill names to SKILL.md content. Each entry creates
+                      workspace/skills/<name>/SKILL.md, overwritten on every pod restart
+                      (operator-managed).
+                    type: object
+                  images:
+                    description: |-
+                      Images declares OCI images mounted as read-only skill directories.
+                      Each image is mounted at workspace/skills/<name>/ via Kubernetes ImageVolume.
+                      Requires Kubernetes 1.31+ with the ImageVolume feature gate enabled.
+                    items:
+                      description: SkillImageSpec declares an OCI image to mount as
+                        a read-only skill directory.
+                      properties:
+                        image:
+                          description: Image is the OCI image reference (tag or digest).
+                          minLength: 1
+                          type: string
+                        imagePullSecrets:
+                          description: |-
+                            ImagePullSecrets is a list of references to Secrets in the same namespace
+                            used to pull this OCI skill image from a private registry.
+                            Secrets declared here are merged into the gateway pod's imagePullSecrets;
+                            because imagePullSecrets is a pod-level field, they may be used to pull
+                            any image in the gateway pod, not only this skill image.
+                          items:
+                            description: |-
+                              LocalObjectReference contains enough information to let you locate the
+                              referenced object inside the same namespace.
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        name:
+                          description: |-
+                            Name is the skill directory name under workspace/skills/.
+                            Must be a valid directory component: no "/", no "..", no "--",
+                            and must not conflict with builtin skills (platform, kubernetes)
+                            or names in spec.skills.content.
+                          minLength: 1
+                          pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                          type: string
+                        pullPolicy:
+                          description: |-
+                            PullPolicy defines when the kubelet pulls the skill image.
+                            Defaults to Always if tag is :latest, IfNotPresent otherwise.
+                          enum:
+                          - Always
+                          - IfNotPresent
+                          - Never
+                          type: string
+                      required:
+                      - image
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                 type: object
               traces:
                 description: |-
@@ -1094,6 +1190,11 @@ spec:
               gatewayURL:
                 description: GatewayURL is the HTTPS URL for accessing the Claw gateway,
                   including the auth token fragment when applicable
+                type: string
+              lastDeployedVersion:
+                description: |-
+                  LastDeployedVersion records the spec.version that was last successfully deployed.
+                  Used to detect version downgrades that may cause PVC data incompatibility.
                 type: string
               url:
                 description: |-

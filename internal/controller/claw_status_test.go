@@ -1247,3 +1247,204 @@ func TestURLConstructionWithTokenFragment(t *testing.T) {
 		assert.Contains(t, result, "#token=")
 	})
 }
+
+func TestSetReadyConditionWithDetail(t *testing.T) {
+	t.Run("ready true ignores detail", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		setReadyConditionWithDetail(instance, true, nil, "some detail")
+		condition := meta.FindStatusCondition(instance.Status.Conditions, clawv1alpha1.ConditionTypeReady)
+		require.NotNil(t, condition)
+		assert.Equal(t, metav1.ConditionTrue, condition.Status)
+		assert.Equal(t, clawv1alpha1.ConditionReasonReady, condition.Reason)
+	})
+
+	t.Run("not ready with init failure detail", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		detail := `init container "init-plugins" failed (exit 1): Error`
+		setReadyConditionWithDetail(instance, false, []string{"instance"}, detail)
+		condition := meta.FindStatusCondition(instance.Status.Conditions, clawv1alpha1.ConditionTypeReady)
+		require.NotNil(t, condition)
+		assert.Equal(t, metav1.ConditionFalse, condition.Status)
+		assert.Equal(t, clawv1alpha1.ConditionReasonInitContainerFailure, condition.Reason)
+		assert.Equal(t, detail, condition.Message)
+	})
+
+	t.Run("not ready without detail falls back to provisioning", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		setReadyConditionWithDetail(instance, false, []string{"instance"}, "")
+		condition := meta.FindStatusCondition(instance.Status.Conditions, clawv1alpha1.ConditionTypeReady)
+		require.NotNil(t, condition)
+		assert.Equal(t, metav1.ConditionFalse, condition.Status)
+		assert.Equal(t, clawv1alpha1.ConditionReasonProvisioning, condition.Reason)
+	})
+}
+
+func TestVersionDowngradeDetection(t *testing.T) {
+	t.Run("should set VersionDowngrade condition on downgrade", func(t *testing.T) {
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		ctx := context.Background()
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Namespace = namespace
+		instance.Spec.Credentials = testCredentials()
+		instance.Spec.Version = "2026.6.8"
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+		setCoreDeploymentsAvailable(t, ctx, testInstanceName, namespace)
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		// Verify version was recorded
+		updated := &clawv1alpha1.Claw{}
+		require.NoError(t, k8sClient.Get(ctx,
+			client.ObjectKey{Name: testInstanceName, Namespace: namespace}, updated))
+		assert.Equal(t, "2026.6.8", updated.Status.LastDeployedVersion)
+
+		// Downgrade
+		updated.Spec.Version = "2026.6.5"
+		require.NoError(t, k8sClient.Update(ctx, updated))
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		require.NoError(t, k8sClient.Get(ctx,
+			client.ObjectKey{Name: testInstanceName, Namespace: namespace}, updated))
+		condition := meta.FindStatusCondition(updated.Status.Conditions,
+			clawv1alpha1.ConditionTypeVersionDowngrade)
+		require.NotNil(t, condition, "VersionDowngrade condition should be set")
+		assert.Equal(t, metav1.ConditionTrue, condition.Status)
+		assert.Contains(t, condition.Message, "2026.6.5")
+		assert.Contains(t, condition.Message, "2026.6.8")
+
+		// Condition must persist across subsequent reconciles (LastDeployedVersion
+		// is a high-water mark and should not be overwritten by the downgraded version)
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+		require.NoError(t, k8sClient.Get(ctx,
+			client.ObjectKey{Name: testInstanceName, Namespace: namespace}, updated))
+		condition = meta.FindStatusCondition(updated.Status.Conditions,
+			clawv1alpha1.ConditionTypeVersionDowngrade)
+		require.NotNil(t, condition, "VersionDowngrade condition should persist across reconciles")
+		assert.Equal(t, "2026.6.8", updated.Status.LastDeployedVersion,
+			"LastDeployedVersion should not be overwritten by a downgraded version")
+	})
+
+	t.Run("should clear VersionDowngrade condition on upgrade", func(t *testing.T) {
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		ctx := context.Background()
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Namespace = namespace
+		instance.Spec.Credentials = testCredentials()
+		instance.Spec.Version = "2026.6.8"
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+		setCoreDeploymentsAvailable(t, ctx, testInstanceName, namespace)
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		// Downgrade to trigger condition
+		updated := &clawv1alpha1.Claw{}
+		require.NoError(t, k8sClient.Get(ctx,
+			client.ObjectKey{Name: testInstanceName, Namespace: namespace}, updated))
+		updated.Spec.Version = "2026.6.5"
+		require.NoError(t, k8sClient.Update(ctx, updated))
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		// Upgrade past the original version
+		require.NoError(t, k8sClient.Get(ctx,
+			client.ObjectKey{Name: testInstanceName, Namespace: namespace}, updated))
+		updated.Spec.Version = "2026.6.10"
+		require.NoError(t, k8sClient.Update(ctx, updated))
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		require.NoError(t, k8sClient.Get(ctx,
+			client.ObjectKey{Name: testInstanceName, Namespace: namespace}, updated))
+		condition := meta.FindStatusCondition(updated.Status.Conditions,
+			clawv1alpha1.ConditionTypeVersionDowngrade)
+		assert.Nil(t, condition, "VersionDowngrade condition should be removed")
+	})
+}
+
+func TestInitContainerFailureSurfacing(t *testing.T) {
+	t.Run("should surface init container failure in Ready condition", func(t *testing.T) {
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		ctx := context.Background()
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Namespace = namespace
+		instance.Spec.Credentials = testCredentials()
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		// Create a pod with init container failure status
+		deployment := &appsv1.Deployment{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name: testInstanceName, Namespace: namespace,
+			}, deployment) == nil
+		}, "deployment should exist")
+
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testInstanceName + "-test-pod",
+				Namespace: namespace,
+				Labels:    deployment.Spec.Selector.MatchLabels,
+			},
+			Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{
+					{Name: "init-plugins", Image: "busybox"},
+				},
+				Containers: []corev1.Container{
+					{Name: "gateway", Image: "busybox"},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, pod))
+
+		pod.Status.InitContainerStatuses = []corev1.ContainerStatus{
+			{
+				Name: "init-plugins",
+				State: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 1,
+						Reason:   "Error",
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Status().Update(ctx, pod))
+
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		updated := &clawv1alpha1.Claw{}
+		require.NoError(t, k8sClient.Get(ctx,
+			client.ObjectKey{Name: testInstanceName, Namespace: namespace}, updated))
+		condition := meta.FindStatusCondition(updated.Status.Conditions,
+			clawv1alpha1.ConditionTypeReady)
+		require.NotNil(t, condition)
+		assert.Equal(t, metav1.ConditionFalse, condition.Status)
+		assert.Equal(t, clawv1alpha1.ConditionReasonInitContainerFailure, condition.Reason)
+		assert.Contains(t, condition.Message, "init-plugins")
+		assert.Contains(t, condition.Message, "exit 1")
+	})
+}

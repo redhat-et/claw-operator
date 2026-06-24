@@ -18,6 +18,7 @@ package controller
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -71,7 +72,9 @@ func effectivePlugins(instance *clawv1alpha1.Claw) []string {
 }
 
 // requiredProviderPlugins inspects credentials and returns plugin package specs
-// that must be installed for the configured providers to work.
+// that must be installed for the configured providers to work. When spec.version
+// is set, the plugin is pinned to that version so the plugin and gateway stay in
+// lockstep (e.g. "@openclaw/anthropic-vertex-provider@2026.6.8").
 func requiredProviderPlugins(instance *clawv1alpha1.Claw) []string {
 	var plugins []string
 	seen := make(map[string]bool)
@@ -84,11 +87,46 @@ func requiredProviderPlugins(instance *clawv1alpha1.Claw) []string {
 			continue
 		}
 		if !seen[defaults.VertexPlugin] {
-			plugins = append(plugins, defaults.VertexPlugin)
+			spec := defaults.VertexPlugin
+			if instance.Spec.Version != "" {
+				spec += "@" + instance.Spec.Version
+			}
+			plugins = append(plugins, spec)
 			seen[defaults.VertexPlugin] = true
 		}
 	}
 	return plugins
+}
+
+// injectProviderPlugins adds plugins.entries declarations for any provider
+// plugins that need to be loaded by the gateway at runtime. Installing a
+// plugin to disk (via init-plugins) is not enough; the gateway only loads
+// extension plugins that are declared in plugins.entries.
+func injectProviderPlugins(config map[string]any, instance *clawv1alpha1.Claw) {
+	var ids []string
+	seen := make(map[string]bool)
+	for _, cred := range instance.Spec.Credentials {
+		if !usesVertexSDK(cred) {
+			continue
+		}
+		defaults, ok := knownProviders[cred.Provider]
+		if !ok || defaults.VertexPluginID == "" {
+			continue
+		}
+		if !seen[defaults.VertexPluginID] {
+			ids = append(ids, defaults.VertexPluginID)
+			seen[defaults.VertexPluginID] = true
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	existingEntries := ensureNestedMap(ensureNestedMap(config, "plugins"), "entries")
+	for _, id := range ids {
+		if _, exists := existingEntries[id]; !exists {
+			existingEntries[id] = map[string]any{"enabled": true}
+		}
+	}
 }
 
 func requiredDiagnosticsPlugins(instance *clawv1alpha1.Claw) []string {
@@ -206,18 +244,8 @@ func configurePluginsInitContainer(
 			"volumeMounts": []any{
 				map[string]any{
 					"name":      "claw-home",
-					"mountPath": "/home/node/.openclaw",
+					"mountPath": "/home/node",
 					"subPath":   "home",
-				},
-				map[string]any{
-					"name":      "claw-home",
-					"mountPath": "/home/node/.local",
-					"subPath":   "home/.local",
-				},
-				map[string]any{
-					"name":      "claw-home",
-					"mountPath": "/home/node/.cache",
-					"subPath":   "home/.cache",
 				},
 				map[string]any{
 					"name":      "proxy-ca",
@@ -246,4 +274,73 @@ func pluginsNoProxy(instance *clawv1alpha1.Claw) string {
 		return base + noProxySuffix
 	}
 	return base
+}
+
+// compareCalver compares two calver version strings (e.g. "2026.6.5").
+// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+// The bool is false when either string is malformed (non-numeric segments).
+func compareCalver(a, b string) (int, bool) {
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+
+	maxLen := len(aParts)
+	if len(bParts) > maxLen {
+		maxLen = len(bParts)
+	}
+
+	for i := range maxLen {
+		var aVal, bVal int
+		var err error
+		if i < len(aParts) {
+			aVal, err = strconv.Atoi(aParts[i])
+			if err != nil {
+				return 0, false
+			}
+		}
+		if i < len(bParts) {
+			bVal, err = strconv.Atoi(bParts[i])
+			if err != nil {
+				return 0, false
+			}
+		}
+		if aVal < bVal {
+			return -1, true
+		}
+		if aVal > bVal {
+			return 1, true
+		}
+	}
+	return 0, true
+}
+
+// checkPluginCompatibility checks whether any implicitly required plugin
+// has a minimum version that exceeds spec.version. Returns a warning
+// message or "" if all plugins are compatible.
+func checkPluginCompatibility(instance *clawv1alpha1.Claw) string {
+	if instance.Spec.Version == "" {
+		return ""
+	}
+	for _, cred := range instance.Spec.Credentials {
+		if !usesVertexSDK(cred) {
+			continue
+		}
+		defaults, ok := knownProviders[cred.Provider]
+		if !ok || defaults.VertexPlugin == "" || defaults.PluginMinVersion == "" {
+			continue
+		}
+		cmp, ok := compareCalver(instance.Spec.Version, defaults.PluginMinVersion)
+		if !ok {
+			return fmt.Sprintf(
+				"cannot check plugin compatibility: spec.version %q is not a valid CalVer string",
+				instance.Spec.Version,
+			)
+		}
+		if cmp < 0 {
+			return fmt.Sprintf(
+				"plugin %s requires OpenClaw >= %s, but spec.version is %s",
+				defaults.VertexPlugin, defaults.PluginMinVersion, instance.Spec.Version,
+			)
+		}
+	}
+	return ""
 }

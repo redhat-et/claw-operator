@@ -260,7 +260,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		)
 		pluginInit := initContainers[3].(map[string]any)
 		volumeMounts := pluginInit["volumeMounts"].([]any)
-		require.Len(t, volumeMounts, 5)
+		require.Len(t, volumeMounts, 3)
 
 		mountPaths := make(map[string]string)
 		for _, vm := range volumeMounts {
@@ -268,9 +268,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 			mountPaths[m["mountPath"].(string)] = m["name"].(string)
 		}
 
-		assert.Equal(t, "claw-home", mountPaths["/home/node/.openclaw"])
-		assert.Equal(t, "claw-home", mountPaths["/home/node/.local"])
-		assert.Equal(t, "claw-home", mountPaths["/home/node/.cache"])
+		assert.Equal(t, "claw-home", mountPaths["/home/node"])
 		assert.Equal(t, "proxy-ca", mountPaths["/etc/proxy-ca"])
 		assert.Equal(t, "tmp-volume", mountPaths["/tmp"])
 	})
@@ -639,7 +637,7 @@ func TestPluginsIntegration(t *testing.T) {
 				for _, vm := range ic.VolumeMounts {
 					mountPaths[vm.MountPath] = vm.Name
 				}
-				assert.Equal(t, "claw-home", mountPaths["/home/node/.openclaw"])
+				assert.Equal(t, "claw-home", mountPaths["/home/node"])
 				assert.Equal(t, "proxy-ca", mountPaths["/etc/proxy-ca"])
 				assert.Equal(t, "tmp-volume", mountPaths["/tmp"])
 				break
@@ -704,7 +702,7 @@ func TestPluginsIntegration(t *testing.T) {
 		t.Fatal("init-plugins container not found")
 	})
 
-	t.Run("should coexist with metrics sidecar", func(t *testing.T) {
+	t.Run("should coexist with metrics enabled", func(t *testing.T) {
 		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
 
 		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
@@ -722,8 +720,7 @@ func TestPluginsIntegration(t *testing.T) {
 		}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
-		reconciler := createClawReconciler()
-		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+		reconcileClaw(t, ctx, createClawReconciler(), testInstanceName, namespace)
 
 		deployment := &appsv1.Deployment{}
 		waitFor(t, timeout, interval, func() bool {
@@ -733,19 +730,16 @@ func TestPluginsIntegration(t *testing.T) {
 			}, deployment) == nil
 		}, "Deployment should be created")
 
-		var hasPluginsInit, hasOtelSidecar bool
+		var hasPluginsInit bool
 		for _, ic := range deployment.Spec.Template.Spec.InitContainers {
 			if ic.Name == PluginsInitContainerName {
 				hasPluginsInit = true
 			}
 		}
-		for _, c := range deployment.Spec.Template.Spec.Containers {
-			if c.Name == OTelCollectorContainerName {
-				hasOtelSidecar = true
-			}
-		}
 		assert.True(t, hasPluginsInit, "should have init-plugins container")
-		assert.True(t, hasOtelSidecar, "should have otel-collector sidecar")
+		for _, c := range deployment.Spec.Template.Spec.Containers {
+			assert.NotEqual(t, "otel-collector", c.Name, "no sidecar expected without Instrumentation CR")
+		}
 	})
 
 	t.Run("should change config hash when plugins change", func(t *testing.T) {
@@ -792,5 +786,95 @@ func TestPluginsIntegration(t *testing.T) {
 		hash2 := deployment.Spec.Template.Annotations[clawv1alpha1.AnnotationKeyGatewayConfigHash]
 		require.NotEmpty(t, hash2)
 		assert.NotEqual(t, hash1, hash2, "config hash should change when plugins change")
+	})
+}
+
+const (
+	testVersionOld       = "2026.6.5"
+	testVersionMinPlugin = "2026.6.8"
+)
+
+func TestCompareCalver(t *testing.T) {
+	tests := []struct {
+		name   string
+		a, b   string
+		want   int
+		wantOK bool
+	}{
+		{"a less than b", testVersionOld, testVersionMinPlugin, -1, true},
+		{"a greater than b", testVersionMinPlugin, testVersionOld, 1, true},
+		{"equal", testVersionMinPlugin, testVersionMinPlugin, 0, true},
+		{"numeric not lexicographic", "2026.10.1", "2026.9.30", 1, true},
+		{"year difference", "2027.1.1", "2026.12.31", 1, true},
+		{"different segment count", "2026.6", "2026.6.0", 0, true},
+		{"malformed a", "invalid", testVersionMinPlugin, 0, false},
+		{"malformed b", testVersionOld, "bad", 0, false},
+		{"both empty", "", "", 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := compareCalver(tt.a, tt.b)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantOK, ok)
+		})
+	}
+}
+
+func TestCheckPluginCompatibility(t *testing.T) {
+	t.Run("no version set", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+				GCP: &clawv1alpha1.GCPConfig{Project: "proj"}},
+		}
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+
+	t.Run("compatible version", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionMinPlugin
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+				GCP: &clawv1alpha1.GCPConfig{Project: "proj"}},
+		}
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+
+	t.Run("incompatible version", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionOld
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
+				GCP: &clawv1alpha1.GCPConfig{Project: "proj"}},
+		}
+		result := checkPluginCompatibility(instance)
+		assert.Contains(t, result, testVersionMinPlugin)
+		assert.Contains(t, result, testVersionOld)
+		assert.Contains(t, result, "@openclaw/anthropic-vertex-provider")
+	})
+
+	t.Run("non-vertex credential", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionOld
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "api", Type: clawv1alpha1.CredentialTypeAPIKey, Provider: "anthropic"},
+		}
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+
+	t.Run("google gcp has no vertex plugin", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionOld
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "google",
+				GCP: &clawv1alpha1.GCPConfig{Project: "proj"}},
+		}
+		assert.Empty(t, checkPluginCompatibility(instance))
+	})
+
+	t.Run("no credentials", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Spec.Version = testVersionOld
+		assert.Empty(t, checkPluginCompatibility(instance))
 	})
 }

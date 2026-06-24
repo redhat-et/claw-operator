@@ -1,0 +1,369 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      quay_namespace:
+        description: Quay namespace to publish into
+        required: false
+        default: redhat-et
+      publish_latest:
+        description: Also tag the operator and proxy images as latest
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  DEFAULT_QUAY_NAMESPACE: redhat-et
+
+jobs:
+  test:
+    name: kind test
+    runs-on: ubuntu-latest
+    env:
+      KIND_CLUSTER: claw-e2e-test
+      IMG: quay.io/redhat-et/claw-operator:test
+      PROXY_IMG: quay.io/redhat-et/claw-proxy:test
+      CONTAINER_TOOL: docker
+      INSTANCE: instance
+      NAMESPACE: default
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Install Kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          echo "50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54  kind" | sha256sum -c
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Create Kind cluster
+        run: |
+          cat <<EOF | kind create cluster --name $KIND_CLUSTER --config=-
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+          - role: control-plane
+            image: kindest/node:v1.35.0@sha256:986401fce0e567a9860075ba9df8c8459bd99a35f79024d8a682773fb40f0753
+          EOF
+
+      - name: Build and load operator images
+        run: |
+          make container-build IMG=$IMG
+          make container-build-proxy PROXY_IMG=$PROXY_IMG
+          kind load docker-image $IMG $PROXY_IMG --name $KIND_CLUSTER
+
+      - name: Install CertManager
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.16.3/cert-manager.yaml
+          kubectl wait deployment cert-manager-webhook \
+            --for=condition=Available \
+            --namespace cert-manager \
+            --timeout=5m
+
+      - name: Install CRDs and deploy operator
+        run: |
+          make install
+          make deploy IMG=$IMG PROXY_IMG=$PROXY_IMG IMAGE_PULL_POLICY=IfNotPresent
+
+      - name: Wait for operator pod
+        run: |
+          kubectl wait deployment claw-operator-controller-manager \
+            --for=condition=Available \
+            --namespace claw-operator \
+            --timeout=2m
+          kubectl get pods -n claw-operator
+
+      - name: Build and load skill OCI image into Kind
+        run: |
+          docker build -t example.com/e2e-skill:latest test/e2e/testdata/skill-image/
+          kind load docker-image example.com/e2e-skill:latest --name $KIND_CLUSTER
+
+      - name: Create credential secret, skill ConfigMap, and Claw CR with all three skill types
+        run: |
+          kubectl create secret generic gemini-api-key \
+            --from-literal=api-key=test-api-key-value \
+            -n $NAMESPACE
+          kubectl label secret gemini-api-key \
+            claw.sandbox.redhat.com/instance=$INSTANCE \
+            -n $NAMESPACE
+
+          kubectl create configmap corp-skills \
+            --from-literal=sales-playbook='# Sales Playbook\nFollow the enterprise sales process.' \
+            --from-literal=onboarding='# Onboarding\nWelcome new hires to the team.' \
+            -n $NAMESPACE
+
+          kubectl apply -n $NAMESPACE -f - <<'EOF'
+          apiVersion: claw.sandbox.redhat.com/v1alpha1
+          kind: Claw
+          metadata:
+            name: instance
+          spec:
+            credentials:
+              - name: gemini
+                type: apiKey
+                secretRef:
+                  - name: gemini-api-key
+                    key: api-key
+                domain: ".googleapis.com"
+                apiKey:
+                  header: x-goog-api-key
+            skills:
+              content:
+                greeting: |
+                  ---
+                  name: greeting
+                  description: A simple greeting skill
+                  ---
+                  Greet the user warmly.
+              images:
+                - name: oci-skill
+                  image: example.com/e2e-skill:latest
+                  pullPolicy: IfNotPresent
+              configMaps:
+                - name: corp-skills
+          EOF
+
+      - name: Wait for Claw Ready
+        run: |
+          echo "Waiting for Claw Ready condition..."
+          for i in $(seq 1 150); do
+            STATUS=$(kubectl get claw $INSTANCE -n $NAMESPACE \
+              -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+            if [ "$STATUS" = "True" ]; then
+              echo "Claw is Ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: Claw did not become Ready within 5 minutes"
+          kubectl get claw $INSTANCE -n $NAMESPACE -o yaml
+          exit 1
+
+      - name: Validate gateway deployment
+        run: |
+          CONTAINERS=$(kubectl get deployment $INSTANCE -n $NAMESPACE \
+            -o 'jsonpath={.spec.template.spec.containers[*].name}')
+          echo "Containers: $CONTAINERS"
+          echo "$CONTAINERS" | grep -q "gateway" || { echo "FAIL: gateway container not found"; exit 1; }
+          echo "PASS: gateway container verified"
+
+      - name: Validate all three skill delivery mechanisms
+        run: |
+          # Get the running gateway pod name
+          POD=$(kubectl get pods -l "claw.sandbox.redhat.com/instance=$INSTANCE" \
+            -n $NAMESPACE -o jsonpath='{.items[0].metadata.name}')
+          echo "Validating skills in pod: $POD"
+          FAIL=0
+
+          # 1. content skill: greeting/SKILL.md written by merge.js from _skill_greeting ConfigMap key
+          if kubectl exec "$POD" -n $NAMESPACE -c gateway -- \
+              grep -q "Greet the user warmly" \
+              /home/node/.openclaw/workspace/skills/greeting/SKILL.md 2>/dev/null; then
+            echo "PASS: content skill greeting/SKILL.md present with correct content"
+          else
+            echo "FAIL: content skill greeting/SKILL.md missing or wrong content"
+            FAIL=1
+          fi
+
+          # 2. configMaps skills: sales-playbook and onboarding written by merge.js
+          for SKILL in sales-playbook onboarding; do
+            if kubectl exec "$POD" -n $NAMESPACE -c gateway -- \
+                test -f "/home/node/.openclaw/workspace/skills/${SKILL}/SKILL.md" 2>/dev/null; then
+              echo "PASS: configMap skill ${SKILL}/SKILL.md present"
+            else
+              echo "FAIL: configMap skill ${SKILL}/SKILL.md missing"
+              FAIL=1
+            fi
+          done
+
+          # 3. images skill: oci-skill mounted directly via ImageVolume
+          if kubectl exec "$POD" -n $NAMESPACE -c gateway -- \
+              test -f /home/node/.openclaw/workspace/skills/oci-skill/SKILL.md 2>/dev/null; then
+            echo "PASS: image skill oci-skill/SKILL.md present"
+          else
+            echo "FAIL: image skill oci-skill/SKILL.md missing"
+            FAIL=1
+          fi
+
+          exit $FAIL
+
+      - name: Collect debug info on failure
+        if: failure()
+        run: |
+          echo "=== Controller Manager Logs ==="
+          POD=$(kubectl get pods -l control-plane=controller-manager \
+            -n claw-operator -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$POD" ]; then
+            kubectl logs "$POD" -n claw-operator --tail=200 || true
+          fi
+
+          echo ""
+          echo "=== Claw CR Status ==="
+          kubectl get claw $INSTANCE -n $NAMESPACE -o yaml 2>/dev/null || true
+
+          echo ""
+          echo "=== Events ==="
+          kubectl get events -n $NAMESPACE --sort-by=.lastTimestamp 2>/dev/null || true
+
+          echo ""
+          echo "=== All Resources ==="
+          kubectl get all -n $NAMESPACE 2>/dev/null || true
+
+          echo ""
+          echo "=== Gateway Pod Describe ==="
+          kubectl describe pods -l claw.sandbox.redhat.com/instance=$INSTANCE -n $NAMESPACE 2>/dev/null || true
+
+          echo ""
+          echo "=== Gateway Container Logs ==="
+          GATEWAY_POD=$(kubectl get pods -l claw.sandbox.redhat.com/instance=$INSTANCE \
+            -n $NAMESPACE -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$GATEWAY_POD" ]; then
+            for CONTAINER in $(kubectl get pod "$GATEWAY_POD" -n $NAMESPACE \
+              -o jsonpath='{.spec.initContainers[*].name} {.spec.containers[*].name}' 2>/dev/null || true); do
+              echo ""
+              echo "--- Logs: $CONTAINER ---"
+              kubectl logs "$GATEWAY_POD" -n $NAMESPACE -c "$CONTAINER" --tail=100 2>/dev/null || echo "(no logs)"
+            done
+          fi
+
+          echo ""
+          echo "=== ConfigMap Data ==="
+          kubectl get configmap ${INSTANCE}-config -n $NAMESPACE -o yaml 2>/dev/null || true
+
+          echo ""
+          echo "=== NetworkPolicies ==="
+          kubectl get networkpolicy -n $NAMESPACE -o yaml 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: kind delete cluster --name $KIND_CLUSTER
+
+  publish:
+    name: Build and Publish
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.QUAY_PUBLISH_ENABLED == 'true')
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve image metadata
+        env:
+          INPUT_QUAY_NAMESPACE: ${{ github.event.inputs.quay_namespace }}
+          INPUT_PUBLISH_LATEST: ${{ github.event.inputs.publish_latest }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse --short HEAD)
+          QUAY_NAMESPACE="${INPUT_QUAY_NAMESPACE:-${DEFAULT_QUAY_NAMESPACE}}"
+          PUBLISH_LATEST="${INPUT_PUBLISH_LATEST:-true}"
+          {
+            echo "SHA=${SHA}"
+            echo "QUAY_NAMESPACE=${QUAY_NAMESPACE}"
+            echo "PUBLISH_LATEST=${PUBLISH_LATEST}"
+            echo "OPERATOR_IMAGE=quay.io/${QUAY_NAMESPACE}/claw-operator:${SHA}"
+            echo "OPERATOR_LATEST_IMAGE=quay.io/${QUAY_NAMESPACE}/claw-operator:latest"
+            echo "PROXY_IMAGE=quay.io/${QUAY_NAMESPACE}/claw-proxy:${SHA}"
+            echo "PROXY_LATEST_IMAGE=quay.io/${QUAY_NAMESPACE}/claw-proxy:latest"
+          } >> "${GITHUB_ENV}"
+
+      - name: Build operator image
+        run: |
+          make container-build IMG="${OPERATOR_IMAGE}"
+          if [ "${PUBLISH_LATEST}" = "true" ]; then
+            podman tag "${OPERATOR_IMAGE}" "${OPERATOR_LATEST_IMAGE}"
+          fi
+
+      - name: Build proxy image
+        run: |
+          make container-build-proxy PROXY_IMG="${PROXY_IMAGE}"
+          if [ "${PUBLISH_LATEST}" = "true" ]; then
+            podman tag "${PROXY_IMAGE}" "${PROXY_LATEST_IMAGE}"
+          fi
+
+      - name: Login to Quay.io
+        env:
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+        run: |
+          set -euo pipefail
+          REGISTRY_AUTH_FILE="${RUNNER_TEMP}/containers-auth.json"
+          export REGISTRY_AUTH_FILE
+          echo "REGISTRY_AUTH_FILE=${REGISTRY_AUTH_FILE}" >> "${GITHUB_ENV}"
+          if [ -z "${QUAY_USERNAME}" ] || [ -z "${QUAY_PASSWORD}" ]; then
+            echo "::error::Set QUAY_USERNAME and QUAY_PASSWORD."
+            exit 1
+          fi
+          printf '%s' "${QUAY_PASSWORD}" | podman login --authfile "${REGISTRY_AUTH_FILE}" --username "${QUAY_USERNAME}" --password-stdin quay.io
+          podman login --authfile "${REGISTRY_AUTH_FILE}" --get-login quay.io
+
+      - name: Push operator image
+        run: |
+          make container-push IMG="${OPERATOR_IMAGE}"
+          if [ "${PUBLISH_LATEST}" = "true" ]; then
+            podman push "${OPERATOR_LATEST_IMAGE}"
+          fi
+
+      - name: Push proxy image
+        run: |
+          make container-push-proxy PROXY_IMG="${PROXY_IMAGE}"
+          if [ "${PUBLISH_LATEST}" = "true" ]; then
+            podman push "${PROXY_LATEST_IMAGE}"
+          fi
+
+      - name: Generate scorecard bundle manifests
+        run: make generate-cd-release-manifests QUAY_NAMESPACE="${QUAY_NAMESPACE}"
+
+      - name: Create Kind cluster for scorecard
+        continue-on-error: true
+        id: kind
+        run: |
+          make kind
+          bin/kind create cluster --name scorecard
+
+      - name: Wait for cluster ready
+        id: cluster_ready
+        if: steps.kind.outcome == 'success'
+        continue-on-error: true
+        run: |
+          kubectl wait --for=condition=Ready nodes --all --timeout=60s
+          kubectl -n default wait --for=jsonpath='{.metadata.name}'=default serviceaccount/default --timeout=60s
+
+      - name: Run scorecard tests
+        if: steps.kind.outcome == 'success' && steps.cluster_ready.outcome == 'success'
+        continue-on-error: true
+        run: |
+          bin/operator-sdk scorecard ./bundle \
+            --kubeconfig=$HOME/.kube/config \
+            --wait-time=120s \
+            --output=text || echo "::warning::Scorecard tests failed (non-blocking)"
+
+      - name: Cleanup Kind cluster
+        if: always() && steps.kind.outcome == 'success'
+        run: bin/kind delete cluster --name scorecard

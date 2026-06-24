@@ -593,6 +593,103 @@ func setOrAppendVolume(volumes []any, volume map[string]any) []any {
 	return append(volumes, volume)
 }
 
+// configureSkillImages adds ImageVolume volumes and read-only mounts for each
+// spec.skills.images entry to the gateway container.
+func configureSkillImages(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
+	if instance.Spec.Skills == nil || len(instance.Spec.Skills.Images) == 0 {
+		return nil
+	}
+
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		volumes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "volumes")
+		containers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+
+		gatewayIdx := -1
+		for i, c := range containers {
+			container, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(container, "name")
+			if name == ClawGatewayContainerName {
+				gatewayIdx = i
+				break
+			}
+		}
+		if gatewayIdx < 0 {
+			return fmt.Errorf("container %q not found in claw deployment", ClawGatewayContainerName)
+		}
+
+		gwContainer := containers[gatewayIdx].(map[string]any)
+		mounts, _, _ := unstructured.NestedSlice(gwContainer, "volumeMounts")
+
+		pullSecretsSeen := map[string]bool{}
+		var pullSecrets []any
+		existing, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "imagePullSecrets")
+		for _, e := range existing {
+			if ref, ok := e.(map[string]any); ok {
+				if n, _, _ := unstructured.NestedString(ref, "name"); n != "" {
+					pullSecretsSeen[n] = true
+					pullSecrets = append(pullSecrets, ref)
+				}
+			}
+		}
+
+		for _, si := range instance.Spec.Skills.Images {
+			volName := "skill-image-" + si.Name
+			imgSpec := map[string]any{
+				"reference": si.Image,
+			}
+			if si.PullPolicy != "" {
+				imgSpec["pullPolicy"] = string(si.PullPolicy)
+			}
+			volumes = setOrAppendVolume(volumes, map[string]any{
+				"name":  volName,
+				"image": imgSpec,
+			})
+			mounts = setOrAppendVolumeMount(mounts, map[string]any{
+				"name":      volName,
+				"mountPath": "/home/node/.openclaw/workspace/skills/" + si.Name,
+				"readOnly":  true,
+			})
+			for _, ps := range si.ImagePullSecrets {
+				if !pullSecretsSeen[ps.Name] {
+					pullSecretsSeen[ps.Name] = true
+					pullSecrets = append(pullSecrets, map[string]any{"name": ps.Name})
+				}
+			}
+		}
+
+		if err := unstructured.SetNestedSlice(gwContainer, mounts, "volumeMounts"); err != nil {
+			return fmt.Errorf("failed to set volume mounts on gateway container: %w", err)
+		}
+		containers[gatewayIdx] = gwContainer
+		if err := unstructured.SetNestedSlice(
+			obj.Object, containers, "spec", "template", "spec", "containers",
+		); err != nil {
+			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
+		}
+		if err := unstructured.SetNestedSlice(
+			obj.Object, volumes, "spec", "template", "spec", "volumes",
+		); err != nil {
+			return fmt.Errorf("failed to set volumes on claw deployment: %w", err)
+		}
+		if len(pullSecrets) > 0 {
+			if err := unstructured.SetNestedSlice(
+				obj.Object, pullSecrets, "spec", "template", "spec", "imagePullSecrets",
+			); err != nil {
+				return fmt.Errorf("failed to set imagePullSecrets on claw deployment: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 // configureAgentFiles wires agent file seed sources (ConfigMap or Git) into
 // the init-config container regardless of management mode. merge.js handles
 // agentFiles independently of CLAW_CONFIG_MANAGEMENT, so only the env vars,
@@ -792,6 +889,76 @@ func configureReadOnlyMounts(obj *unstructured.Unstructured, readOnly []string) 
 // merge.js) and whole-home PVC mount on both init-config and gateway containers.
 // This function is temporary — it will be removed when merge.js derives behavior
 // from file-level signals instead of a mode flag (design doc step 6).
+// configureGatewayWholeHomeMount ensures the gateway and init-config containers
+// mount the PVC at /home/node (not /home/node/.openclaw) so that paths are
+// consistent with the init-plugins container, which always mounts at /home/node.
+func configureGatewayWholeHomeMount(objects []*unstructured.Unstructured, instanceName string) error {
+	gatewayName := getClawDeploymentName(instanceName)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		initContainers, found, err := unstructured.NestedSlice(
+			obj.Object, "spec", "template", "spec", "initContainers",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to get init containers from claw deployment: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("initContainers field not found in claw deployment")
+		}
+		for i, ic := range initContainers {
+			container, ok := ic.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(container, "name")
+			if name != ClawInitConfigContainerName {
+				continue
+			}
+			if err := configureWholeHomeMount(container); err != nil {
+				return fmt.Errorf("failed to configure init-config home mount: %w", err)
+			}
+			initContainers[i] = container
+		}
+		if err := unstructured.SetNestedSlice(
+			obj.Object, initContainers, "spec", "template", "spec", "initContainers",
+		); err != nil {
+			return fmt.Errorf("failed to set init containers on claw deployment: %w", err)
+		}
+
+		containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+		if err != nil {
+			return fmt.Errorf("failed to get containers from claw deployment: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("containers field not found in claw deployment")
+		}
+		for i, c := range containers {
+			container, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(container, "name")
+			if name != ClawGatewayContainerName {
+				continue
+			}
+			if err := configureWholeHomeMount(container); err != nil {
+				return fmt.Errorf("failed to configure gateway home mount: %w", err)
+			}
+			containers[i] = container
+		}
+		if err := unstructured.SetNestedSlice(
+			obj.Object, containers, "spec", "template", "spec", "containers",
+		); err != nil {
+			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("claw deployment not found in manifests")
+}
+
 func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
 	if !userManagedConfig(instance) {
 		return nil
@@ -829,9 +996,6 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 			if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
 				return fmt.Errorf("failed to set init-config env vars: %w", err)
 			}
-			if err := configureWholeHomeMount(container); err != nil {
-				return fmt.Errorf("failed to configure init-config home mount: %w", err)
-			}
 			initContainers[i] = container
 		}
 		if !initConfigFound {
@@ -841,38 +1005,6 @@ func configureUserManagedOpenClawFiles(objects []*unstructured.Unstructured, ins
 			obj.Object, initContainers, "spec", "template", "spec", "initContainers",
 		); err != nil {
 			return fmt.Errorf("failed to set init containers on claw deployment: %w", err)
-		}
-
-		containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
-		if err != nil {
-			return fmt.Errorf("failed to get containers from claw deployment: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("containers field not found in claw deployment")
-		}
-		gatewayFound := false
-		for i, c := range containers {
-			container, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, _, _ := unstructured.NestedString(container, "name")
-			if name != ClawGatewayContainerName {
-				continue
-			}
-			gatewayFound = true
-			if err := configureWholeHomeMount(container); err != nil {
-				return fmt.Errorf("failed to configure gateway home mount: %w", err)
-			}
-			containers[i] = container
-		}
-		if !gatewayFound {
-			return fmt.Errorf("container %q not found in claw deployment", ClawGatewayContainerName)
-		}
-		if err := unstructured.SetNestedSlice(
-			obj.Object, containers, "spec", "template", "spec", "containers",
-		); err != nil {
-			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
 		}
 		return nil
 	}
@@ -1292,4 +1424,29 @@ func (r *ClawResourceReconciler) validateGitSecretRef(
 		}
 	}
 	return nil
+}
+
+func configureClawDeploymentServiceAccount(
+	objects []*unstructured.Unstructured,
+	instance *clawv1alpha1.Claw,
+) error {
+	if instance.Spec.ServiceAccountName == "" {
+		return nil
+	}
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+		if err := unstructured.SetNestedField(obj.Object, instance.Spec.ServiceAccountName,
+			"spec", "template", "spec", "serviceAccountName"); err != nil {
+			return fmt.Errorf("failed to set serviceAccountName: %w", err)
+		}
+		if err := unstructured.SetNestedField(obj.Object, true,
+			"spec", "template", "spec", "automountServiceAccountToken"); err != nil {
+			return fmt.Errorf("failed to set automountServiceAccountToken: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("claw deployment not found in manifests")
 }

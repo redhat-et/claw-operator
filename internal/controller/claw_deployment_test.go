@@ -324,8 +324,8 @@ func TestClawImageOverrideIntegration(t *testing.T) {
 
 		gateway := findContainer(deployment, ClawGatewayContainerName)
 		require.NotNil(t, gateway, "gateway container should exist")
-		assert.Equal(t, OpenClawImageBase+":2026.6.8", gateway.Image,
-			"should use Kustomize default when spec.version is empty")
+		assert.Equal(t, OpenClawImageBase+":"+DefaultOpenClawVersion, gateway.Image,
+			"should use default version when spec.version is empty")
 	})
 }
 
@@ -1191,6 +1191,7 @@ func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
 		instance.Name = testInstanceName
 		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
 
+		require.NoError(t, configureGatewayWholeHomeMount(objects, instance.Name))
 		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
 
 		envMap := initConfigEnvMap(objects)
@@ -2597,5 +2598,65 @@ func TestStampGitSecretVersion(t *testing.T) {
 		annotationKey := clawv1alpha1.AnnotationPrefixSecretVersion +
 			gitCredentialsVolumeName + clawv1alpha1.AnnotationSuffixSecretVersion
 		assert.Equal(t, secret.ResourceVersion, annotations[annotationKey])
+	})
+}
+
+func TestConfigureClawDeploymentServiceAccount(t *testing.T) {
+	makeDeployment := func() []*unstructured.Unstructured {
+		dep := &unstructured.Unstructured{}
+		dep.SetKind(DeploymentKind)
+		dep.SetName(getClawDeploymentName(testInstanceName))
+		dep.Object["spec"] = map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"automountServiceAccountToken": false,
+					"containers": []any{
+						map[string]any{
+							"name": ClawGatewayContainerName,
+						},
+					},
+				},
+			},
+		}
+		return []*unstructured.Unstructured{dep}
+	}
+
+	t.Run("no-op when serviceAccountName is empty", func(t *testing.T) {
+		objects := makeDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+
+		require.NoError(t, configureClawDeploymentServiceAccount(objects, instance))
+
+		_, found, _ := unstructured.NestedString(
+			objects[0].Object, "spec", "template", "spec", "serviceAccountName",
+		)
+		assert.False(t, found, "serviceAccountName should not be set")
+
+		automount, _, _ := unstructured.NestedBool(
+			objects[0].Object, "spec", "template", "spec", "automountServiceAccountToken",
+		)
+		assert.False(t, automount, "automountServiceAccountToken should remain false")
+	})
+
+	t.Run("sets serviceAccountName and enables automount", func(t *testing.T) {
+		objects := makeDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.ServiceAccountName = "my-reader"
+
+		require.NoError(t, configureClawDeploymentServiceAccount(objects, instance))
+
+		sa, found, _ := unstructured.NestedString(
+			objects[0].Object, "spec", "template", "spec", "serviceAccountName",
+		)
+		assert.True(t, found)
+		assert.Equal(t, "my-reader", sa)
+
+		automount, found, _ := unstructured.NestedBool(
+			objects[0].Object, "spec", "template", "spec", "automountServiceAccountToken",
+		)
+		assert.True(t, found)
+		assert.True(t, automount, "automountServiceAccountToken should be enabled")
 	})
 }
