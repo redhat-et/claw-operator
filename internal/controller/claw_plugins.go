@@ -54,6 +54,7 @@ func pluginPackageName(spec string) string {
 func effectivePlugins(instance *clawv1alpha1.Claw) []string {
 	implicit := requiredProviderPlugins(instance)
 	implicit = append(implicit, requiredDiagnosticsPlugins(instance)...)
+	implicit = append(implicit, requiredOpenShellPlugins(instance)...)
 	if len(implicit) == 0 {
 		return instance.Spec.Plugins
 	}
@@ -138,6 +139,13 @@ func requiredDiagnosticsPlugins(instance *clawv1alpha1.Claw) []string {
 		plugins = append(plugins, "@openclaw/diagnostics-prometheus")
 	}
 	return plugins
+}
+
+func requiredOpenShellPlugins(instance *clawv1alpha1.Claw) []string {
+	if !openShellEnabled(instance) {
+		return nil
+	}
+	return []string{openShellPluginPackage}
 }
 
 func generatePluginInstallScript(plugins []string) string {

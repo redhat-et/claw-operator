@@ -85,6 +85,7 @@ const (
 	ConditionTypeRestrictionsEnforced = "RestrictionsEnforced"
 	ConditionTypePluginCompatibility  = "PluginCompatibility"
 	ConditionTypeVersionDowngrade     = "VersionDowngrade"
+	ConditionTypeOpenShellConfigured  = "OpenShellConfigured"
 )
 
 // Annotation keys used on pod templates to trigger rollouts on config changes.
@@ -729,6 +730,72 @@ type SkillsSpec struct {
 	ConfigMaps []SkillConfigMapRef `json:"configMaps,omitempty"`
 }
 
+// OpenShellMode controls how the OpenShell plugin manages workspace state.
+// +kubebuilder:validation:Enum=remote;mirror
+type OpenShellMode string
+
+const (
+	OpenShellModeRemote OpenShellMode = "remote"
+	OpenShellModeMirror OpenShellMode = "mirror"
+)
+
+// OpenShellGatewayRef references an OpenShellGateway used by this Claw.
+type OpenShellGatewayRef struct {
+	// Name is the OpenShellGateway name.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Namespace is the OpenShellGateway namespace. When omitted, the Claw
+	// namespace is used.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// OpenShellSpec configures OpenClaw's OpenShell sandbox backend integration.
+type OpenShellSpec struct {
+	// Enabled activates the OpenShell sandbox backend for agent sessions.
+	// +optional
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+
+	// GatewayRef references an operator-managed OpenShellGateway. Prefer this
+	// over gatewayEndpoint so the operator can derive NetworkPolicy selectors.
+	// +optional
+	GatewayRef *OpenShellGatewayRef `json:"gatewayRef,omitempty"`
+
+	// GatewayEndpoint is an explicit in-cluster OpenShell gateway URL. Use this
+	// for gateways not represented by an OpenShellGateway object.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^https?://`
+	GatewayEndpoint string `json:"gatewayEndpoint,omitempty"`
+
+	// OpenClawImage overrides the OpenClaw gateway/init image when OpenShell is
+	// enabled. Use an image that includes the OpenShell CLI and plugin runtime
+	// dependencies.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	OpenClawImage string `json:"openClawImage,omitempty"`
+
+	// SandboxImage is passed to the OpenShell plugin as the sandbox image.
+	// Defaults to the OpenClaw OpenShell sandbox image.
+	// +optional
+	// +kubebuilder:default="quay.io/sallyom/openclaw-openshell-sandbox:latest"
+	SandboxImage string `json:"sandboxImage,omitempty"`
+
+	// Mode controls OpenShell workspace synchronization. Defaults to remote.
+	// +optional
+	// +kubebuilder:default=remote
+	Mode OpenShellMode `json:"mode,omitempty"`
+
+	// TimeoutSeconds controls OpenShell CLI operations such as create/upload.
+	// Defaults to 180 seconds.
+	// +optional
+	// +kubebuilder:default=180
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3600
+	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
+}
+
 // ClawSpec defines the desired state of Claw
 type ClawSpec struct {
 	// Config provides user-supplied OpenClaw configuration and merge behavior.
@@ -790,6 +857,12 @@ type ClawSpec struct {
 	// MCP server egress rules are auto-generated from spec.mcpServers URLs.
 	// +optional
 	Network *NetworkSpec `json:"network,omitempty"`
+
+	// OpenShell configures OpenClaw to delegate agent session execution to
+	// OpenShell-managed sandbox pods while keeping provider traffic on the
+	// claw-proxy path.
+	// +optional
+	OpenShell *OpenShellSpec `json:"openshell,omitempty"`
 
 	// Plugins lists OpenClaw plugins to install via an init container before
 	// the gateway starts. Each entry is a package name (e.g. "@openclaw/matrix").

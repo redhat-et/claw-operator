@@ -38,15 +38,16 @@ import (
 const gitCredentialsVolumeName = "git-credentials"
 const protectedFilesVolumeName = "protected-files"
 
-// configureClawImage overrides the OpenClaw container image tag on the gateway
-// Deployment when spec.version is set. Affects init-volume, init-config (init
-// containers) and gateway (regular container).
+// configureClawImage overrides the OpenClaw container image on the gateway
+// Deployment. spec.openshell.openClawImage takes precedence when OpenShell is
+// enabled; otherwise spec.version selects an OpenClaw release tag. Affects
+// init-volume, init-config (init containers), and gateway (regular container).
 func configureClawImage(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
-	if instance.Spec.Version == "" {
+	image := openClawImageForInstance(instance)
+	if image == "" {
 		return nil
 	}
 
-	image := OpenClawImageBase + ":" + instance.Spec.Version
 	gatewayName := getClawDeploymentName(instance.Name)
 	clawContainers := map[string]bool{
 		ClawInitVolumeContainerName: true,
@@ -118,6 +119,16 @@ func configureClawImage(objects []*unstructured.Unstructured, instance *clawv1al
 		return nil
 	}
 	return fmt.Errorf("claw deployment not found in manifests")
+}
+
+func openClawImageForInstance(instance *clawv1alpha1.Claw) string {
+	if openShellEnabled(instance) && instance.Spec.OpenShell.OpenClawImage != "" {
+		return instance.Spec.OpenShell.OpenClawImage
+	}
+	if instance.Spec.Version == "" {
+		return ""
+	}
+	return OpenClawImageBase + ":" + instance.Spec.Version
 }
 
 // configureImagePullPolicy overrides imagePullPolicy on all containers in all
@@ -1319,7 +1330,7 @@ func configureGatewayNoProxy(objects []*unstructured.Unstructured, instance *cla
 			if name, _, _ := unstructured.NestedString(cm, "name"); name != ClawGatewayContainerName {
 				continue
 			}
-			appendNoProxySuffix(cm)
+			appendNoProxyValues(cm, []string{".svc", ".svc.cluster.local"})
 			containers[i] = cm
 			return unstructured.SetNestedSlice(obj.Object, containers, "spec", "template", "spec", "containers")
 		}
@@ -1328,9 +1339,46 @@ func configureGatewayNoProxy(objects []*unstructured.Unstructured, instance *cla
 	return fmt.Errorf("gateway deployment %s not found", gatewayName)
 }
 
-// appendNoProxySuffix appends noProxySuffix to NO_PROXY and no_proxy env vars.
-func appendNoProxySuffix(container map[string]any) {
+func configureGatewayOpenShellNoProxy(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw, resolved resolvedOpenShell) error {
+	if !resolved.Enabled || len(resolved.NoProxyHosts) == 0 {
+		return nil
+	}
+
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+		if err != nil {
+			return fmt.Errorf("failed to get containers from gateway deployment: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("containers field not found in gateway deployment")
+		}
+
+		for i, c := range containers {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			if name, _, _ := unstructured.NestedString(cm, "name"); name != ClawGatewayContainerName {
+				continue
+			}
+			appendNoProxyValues(cm, resolved.NoProxyHosts)
+			containers[i] = cm
+			return unstructured.SetNestedSlice(obj.Object, containers, "spec", "template", "spec", "containers")
+		}
+		return fmt.Errorf("container %q not found in gateway deployment", ClawGatewayContainerName)
+	}
+	return fmt.Errorf("gateway deployment %s not found", gatewayName)
+}
+
+// appendNoProxyValues appends values to NO_PROXY and no_proxy env vars.
+func appendNoProxyValues(container map[string]any, values []string) {
 	envVars, _, _ := unstructured.NestedSlice(container, "env")
+	seenVars := map[string]bool{}
 	for i, e := range envVars {
 		em, ok := e.(map[string]any)
 		if !ok {
@@ -1338,13 +1386,43 @@ func appendNoProxySuffix(container map[string]any) {
 		}
 		name, _, _ := unstructured.NestedString(em, "name")
 		if name == "NO_PROXY" || name == envNoProxyLower {
-			if val, _, _ := unstructured.NestedString(em, "value"); val != "" {
-				em["value"] = val + noProxySuffix
-				envVars[i] = em
-			}
+			seenVars[name] = true
+			val, _, _ := unstructured.NestedString(em, "value")
+			em["value"] = appendNoProxyList(val, values)
+			envVars[i] = em
+		}
+	}
+	for _, name := range []string{"NO_PROXY", envNoProxyLower} {
+		if !seenVars[name] {
+			envVars = append(envVars, map[string]any{
+				"name":  name,
+				"value": strings.Join(values, ","),
+			})
 		}
 	}
 	_ = unstructured.SetNestedSlice(container, envVars, "env")
+}
+
+func appendNoProxyList(existing string, values []string) string {
+	var ordered []string
+	seen := map[string]bool{}
+	for _, item := range strings.Split(existing, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		ordered = append(ordered, item)
+		seen[item] = true
+	}
+	for _, item := range values {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		ordered = append(ordered, item)
+		seen[item] = true
+	}
+	return strings.Join(ordered, ",")
 }
 
 // inClusterBypassEnabled returns true if spec.network.inClusterBypass is explicitly true.
