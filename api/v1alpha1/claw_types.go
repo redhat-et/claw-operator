@@ -658,7 +658,9 @@ type SkillImageSpec struct {
 
 	// ImagePullSecrets is a list of references to Secrets in the same namespace
 	// used to pull this OCI skill image from a private registry.
-	// Merged into the gateway pod's imagePullSecrets at reconcile time.
+	// Secrets declared here are merged into the gateway pod's imagePullSecrets;
+	// because imagePullSecrets is a pod-level field, they may be used to pull
+	// any image in the gateway pod, not only this skill image.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
