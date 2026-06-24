@@ -415,7 +415,7 @@ type ClawResourceReconciler struct {
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -555,6 +555,26 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	resolvedOpenShell, openShellResult, err := r.resolveOpenShell(ctx, instance)
+	if err != nil {
+		logger.Error(err, "OpenShell validation failed")
+		setCondition(instance, clawv1alpha1.ConditionTypeOpenShellConfigured, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after OpenShell validation failure")
+		}
+		return ctrl.Result{}, err
+	}
+	if openShellResult.Requeue {
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status while waiting for OpenShell")
+			return ctrl.Result{}, statusErr
+		}
+		return openShellResult, nil
+	}
+
 	// Resolve persona ConfigMap keys (if restrictions.personaRef is set)
 	personaKeys, personaData, err := r.resolvePersonaRef(ctx, instance)
 	if err != nil {
@@ -580,7 +600,7 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Apply deployment overrides (proxy image, pull policy, credentials)
-	if err := r.configureDeployments(instance, objects, resolvedCreds, personaKeys); err != nil {
+	if err := r.configureDeployments(instance, objects, resolvedCreds, personaKeys, resolvedOpenShell); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -652,7 +672,7 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Phase 3: Inject Route host into ConfigMap and apply remaining resources
-	if err := r.enrichConfigAndNetworkPolicy(ctx, objects, routeHost, instance, resolvedCreds); err != nil {
+	if err := r.enrichConfigAndNetworkPolicy(ctx, objects, routeHost, instance, resolvedCreds, resolvedOpenShell); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -792,6 +812,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	routeHost string,
 	instance *clawv1alpha1.Claw,
 	resolvedCreds []resolvedCredential,
+	resolvedOpenShell resolvedOpenShell,
 ) error {
 	configMapName := getConfigMapName(instance.Name)
 	cmObj, err := findObject(objects, ConfigMapKind, configMapName)
@@ -838,6 +859,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	}
 
 	injectDiagnosticsConfig(config, instance)
+	injectOpenShellConfig(config, resolvedOpenShell)
 	injectSkipBootstrap(config, instance)
 	if !userManagedConfig(instance) {
 		injectBootstrapHook(config)
@@ -885,6 +907,9 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	if err := injectMcpProxyEgressPorts(objects, mcpTargets, instance.Name); err != nil {
 		return fmt.Errorf("failed to inject MCP proxy egress ports: %w", err)
 	}
+	if err := injectOpenShellGatewayEgressRule(objects, instance.Name, resolvedOpenShell); err != nil {
+		return fmt.Errorf("failed to inject OpenShell gateway egress rule: %w", err)
+	}
 	if err := injectAdditionalEgress(objects, instance); err != nil {
 		return fmt.Errorf("failed to inject additional egress rules: %w", err)
 	}
@@ -916,6 +941,7 @@ func (r *ClawResourceReconciler) configureDeployments(
 	objects []*unstructured.Unstructured,
 	resolvedCreds []resolvedCredential,
 	personaKeys []string,
+	resolvedOpenShell resolvedOpenShell,
 ) error {
 	if err := configureClawImage(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure OpenClaw image: %w", err)
@@ -996,6 +1022,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	}
 	if err := configureGatewayNoProxy(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure gateway NO_PROXY: %w", err)
+	}
+	if err := configureGatewayOpenShellNoProxy(objects, instance, resolvedOpenShell); err != nil {
+		return fmt.Errorf("failed to configure OpenShell gateway NO_PROXY: %w", err)
 	}
 	if err := configureImagePullPolicy(objects, r.ImagePullPolicy); err != nil {
 		return fmt.Errorf("failed to configure image pull policy: %w", err)
