@@ -18,6 +18,8 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -265,7 +267,7 @@ func main() {
 		OTelCollectorImage: os.Getenv("OTEL_COLLECTOR_IMAGE"),
 		ImagePullPolicy:    imagePullPolicy,
 		OperatorNamespace:  getOperatorNamespace(),
-		OperatorSAName:     os.Getenv("OPERATOR_SA_NAME"),
+		OperatorSAName:     getOperatorSAName(),
 		MetricsRefreshed:   make(chan struct{}),
 	}
 	if err = clawReconciler.SetupWithManager(mgr); err != nil {
@@ -332,6 +334,47 @@ func getOperatorNamespace() string {
 		return strings.TrimSpace(string(data))
 	}
 	return "claw-operator-system"
+}
+
+func getOperatorSAName() string {
+	if name := os.Getenv("OPERATOR_SA_NAME"); name != "" {
+		return name
+	}
+	// spec.serviceAccountName downward API is unreliable on some OpenShift versions.
+	// Fall back to parsing the projected SA token JWT — the kubernetes.io claim always
+	// contains the service account name regardless of cluster variant.
+	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
+		if name := saNameFromToken(string(data)); name != "" {
+			return name
+		}
+	}
+	return "claw-operator-controller-manager"
+}
+
+// saNameFromToken extracts the service account name from a Kubernetes bound SA JWT token
+// without signature verification (we trust the in-cluster mount).
+func saNameFromToken(token string) string {
+	parts := strings.SplitN(token, ".", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return ""
+	}
+	// Kubernetes bound tokens nest SA info under "kubernetes.io".
+	if k8s, ok := claims["kubernetes.io"].(map[string]interface{}); ok {
+		if sa, ok := k8s["serviceaccount"].(map[string]interface{}); ok {
+			if name, ok := sa["name"].(string); ok {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 var validImagePullPolicies = map[string]bool{
