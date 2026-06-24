@@ -300,6 +300,21 @@ func TestValidateSkillImages(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "has empty image reference")
 	})
+
+	t.Run("should reject empty imagePullSecret name", func(t *testing.T) {
+		images := []clawv1alpha1.SkillImageSpec{
+			{
+				Name:  "my-skill",
+				Image: "quay.io/corp/skill:1.0.0",
+				ImagePullSecrets: []corev1.LocalObjectReference{
+					{Name: ""},
+				},
+			},
+		}
+		err := validateSkillImages(images, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "imagePullSecret with empty name")
+	})
 }
 
 // --- validateSkills tests ---
