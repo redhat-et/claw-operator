@@ -48,7 +48,7 @@ func TestReconcileExecRoleBinding(t *testing.T) {
 		}, "exec RoleBinding should be created")
 
 		assert.Equal(t, "ClusterRole", rb.RoleRef.Kind)
-		assert.Equal(t, ExecClusterRoleName, rb.RoleRef.Name)
+		assert.Equal(t, defaultExecClusterRoleName, rb.RoleRef.Name)
 		require.Len(t, rb.Subjects, 1)
 		assert.Equal(t, rbacv1.ServiceAccountKind, rb.Subjects[0].Kind)
 		assert.Equal(t, "test-operator-sa", rb.Subjects[0].Name)

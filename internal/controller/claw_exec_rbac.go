@@ -23,26 +23,34 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	clawv1alpha1 "github.com/codeready-toolchain/claw-operator/api/v1alpha1"
 )
 
-// ExecClusterRoleName is the kustomize-prefixed name of the ClusterRole that grants
+// defaultExecClusterRoleName is the kustomize-prefixed name of the ClusterRole that grants
 // pods/exec. After kustomize applies namePrefix "claw-operator-", the name in the
 // exec_clusterrole.yaml ("exec-role") becomes "claw-operator-exec-role" in the cluster.
 // This ClusterRole is never bound cluster-wide; the reconciler creates a namespace-scoped
 // RoleBinding per Claw CR, so exec access is limited to namespaces with active Claw instances.
-const ExecClusterRoleName = "claw-operator-exec-role"
+const defaultExecClusterRoleName = "claw-operator-exec-role"
+
+// execClusterRoleName returns the effective ClusterRole name for pods/exec binding.
+// If ExecClusterRoleName is set on the reconciler, that value is used; otherwise
+// the package default is returned.
+func (r *ClawResourceReconciler) execClusterRoleName() string {
+	if r.ExecClusterRoleName != "" {
+		return r.ExecClusterRoleName
+	}
+	return defaultExecClusterRoleName
+}
 
 // reconcileExecRoleBinding creates or updates a namespace-scoped RoleBinding in
-// instance.Namespace that binds ExecClusterRoleName to the operator's ServiceAccount.
+// instance.Namespace that binds the exec ClusterRole to the operator's ServiceAccount.
 // The RoleBinding is owner-referenced to the Claw CR so it is garbage-collected when the CR is deleted.
-// If OperatorSAName or OperatorNamespace is not configured, the function is a no-op.
+// Returns an error if OperatorSAName or OperatorNamespace is not configured.
 func (r *ClawResourceReconciler) reconcileExecRoleBinding(ctx context.Context, instance *clawv1alpha1.Claw) error {
 	if r.OperatorSAName == "" || r.OperatorNamespace == "" {
-		log.FromContext(ctx).Info("skipping exec RoleBinding: operator SA identity not configured")
-		return nil
+		return fmt.Errorf("operator SA identity not configured: OperatorSAName=%q OperatorNamespace=%q", r.OperatorSAName, r.OperatorNamespace)
 	}
 
 	rb := &rbacv1.RoleBinding{
@@ -60,7 +68,7 @@ func (r *ClawResourceReconciler) reconcileExecRoleBinding(ctx context.Context, i
 		rb.RoleRef = rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "ClusterRole",
-			Name:     ExecClusterRoleName,
+			Name:     r.execClusterRoleName(),
 		}
 		rb.Subjects = []rbacv1.Subject{{
 			Kind:      rbacv1.ServiceAccountKind,

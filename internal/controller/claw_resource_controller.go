@@ -392,13 +392,14 @@ type ClawResourceReconciler struct {
 	// UserSecretReader reads user-owned Secrets directly from the API server,
 	// bypassing the informer cache (where Transform has stripped .Data).
 	// Operator-owned Secrets keep full .Data in cache and use r.Get().
-	UserSecretReader   client.Reader
-	ProxyImage         string
-	KubectlImage       string
-	OTelCollectorImage string
-	ImagePullPolicy    string
-	OperatorNamespace  string // namespace the operator SA lives in
-	OperatorSAName     string // name of the operator's ServiceAccount
+	UserSecretReader    client.Reader
+	ProxyImage          string
+	KubectlImage        string
+	OTelCollectorImage  string
+	ImagePullPolicy     string
+	OperatorNamespace   string // namespace the operator SA lives in
+	OperatorSAName      string // name of the operator's ServiceAccount
+	ExecClusterRoleName string // name of the ClusterRole granting pods/exec; defaults to defaultExecClusterRoleName
 	// MetricsRefreshed is closed by Start() after the initial metrics refresh.
 	// Reconcile() waits on it so no reconciliation runs before metrics are populated.
 	MetricsRefreshed chan struct{}

@@ -81,6 +81,8 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: spec.serviceAccountName
+          - name: EXEC_CLUSTER_ROLE_NAME
+            value: "claw-operator-exec-role"
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

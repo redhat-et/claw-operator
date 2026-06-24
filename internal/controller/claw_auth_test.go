@@ -640,9 +640,12 @@ func TestPasswordAuthModeReconciliation(t *testing.T) {
 
 		createClawInstanceWithPasswordAuth(t, "nonexistent-password-secret")
 		reconciler := &ClawResourceReconciler{
-			Client:           k8sClient,
-			Scheme:           scheme.Scheme,
-			UserSecretReader: k8sClient,
+			Client:              k8sClient,
+			Scheme:              scheme.Scheme,
+			UserSecretReader:    k8sClient,
+			OperatorNamespace:   "test-operator-ns",
+			OperatorSAName:      "test-operator-sa",
+			ExecClusterRoleName: "test-exec-role",
 		}
 
 		_, err := reconciler.Reconcile(ctx, ctrl.Request{

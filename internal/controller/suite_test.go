@@ -29,6 +29,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -148,6 +149,7 @@ func deleteAndWaitAllResources(t *testing.T, namespace string, instanceNames ...
 		{&appsv1.Deployment{}, client.ObjectKey{Name: getClawDeploymentName(instanceName), Namespace: namespace}},
 		{&corev1.Service{}, client.ObjectKey{Name: getProxyServiceName(instanceName), Namespace: namespace}},
 		{&appsv1.Deployment{}, client.ObjectKey{Name: getProxyDeploymentName(instanceName), Namespace: namespace}},
+		{&rbacv1.RoleBinding{}, client.ObjectKey{Name: instanceName + "-exec", Namespace: namespace}},
 	}
 
 	for _, r := range resources {
@@ -338,9 +340,12 @@ func toResolved(specs []clawv1alpha1.CredentialSpec) []resolvedCredential {
 // UserSecretReader, so all Secret reads work without informer cache distinctions.
 func createClawReconciler() *ClawResourceReconciler {
 	return &ClawResourceReconciler{
-		Client:           k8sClient,
-		Scheme:           scheme.Scheme,
-		UserSecretReader: k8sClient,
+		Client:              k8sClient,
+		Scheme:              scheme.Scheme,
+		UserSecretReader:    k8sClient,
+		OperatorNamespace:   "test-operator-ns",
+		OperatorSAName:      "test-operator-sa",
+		ExecClusterRoleName: "test-exec-role",
 	}
 }
 

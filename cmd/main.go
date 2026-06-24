@@ -259,17 +259,23 @@ func main() {
 	}
 
 	clawReconciler := &controller.ClawResourceReconciler{
-		Client:             mgr.GetClient(),
-		Scheme:             mgr.GetScheme(),
-		UserSecretReader:   controller.NewLoggingUserSecretReader(mgr.GetAPIReader()),
-		ProxyImage:         os.Getenv("PROXY_IMAGE"),
-		KubectlImage:       os.Getenv("KUBECTL_IMAGE"),
-		OTelCollectorImage: os.Getenv("OTEL_COLLECTOR_IMAGE"),
-		ImagePullPolicy:    imagePullPolicy,
-		OperatorNamespace:  getOperatorNamespace(),
-		OperatorSAName:     getOperatorSAName(),
-		MetricsRefreshed:   make(chan struct{}),
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		UserSecretReader:    controller.NewLoggingUserSecretReader(mgr.GetAPIReader()),
+		ProxyImage:          os.Getenv("PROXY_IMAGE"),
+		KubectlImage:        os.Getenv("KUBECTL_IMAGE"),
+		OTelCollectorImage:  os.Getenv("OTEL_COLLECTOR_IMAGE"),
+		ImagePullPolicy:     imagePullPolicy,
+		OperatorNamespace:   getOperatorNamespace(),
+		OperatorSAName:      getOperatorSAName(),
+		ExecClusterRoleName: os.Getenv("EXEC_CLUSTER_ROLE_NAME"),
+		MetricsRefreshed:    make(chan struct{}),
 	}
+	setupLog.Info("operator identity resolved",
+		"namespace", clawReconciler.OperatorNamespace,
+		"serviceAccount", clawReconciler.OperatorSAName,
+		"execClusterRole", clawReconciler.ExecClusterRoleName,
+	)
 	if err = clawReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Claw")
 		os.Exit(1)
@@ -366,13 +372,17 @@ func saNameFromToken(token string) string {
 	if err := json.Unmarshal(decoded, &claims); err != nil {
 		return ""
 	}
-	// Kubernetes bound tokens nest SA info under "kubernetes.io".
+	// Kubernetes bound tokens (1.22+) nest SA info under "kubernetes.io".
 	if k8s, ok := claims["kubernetes.io"].(map[string]interface{}); ok {
 		if sa, ok := k8s["serviceaccount"].(map[string]interface{}); ok {
 			if name, ok := sa["name"].(string); ok {
 				return name
 			}
 		}
+	}
+	// Legacy non-bound tokens use a flat top-level claim.
+	if name, ok := claims["kubernetes.io/serviceaccount/service-account.name"].(string); ok {
+		return name
 	}
 	return ""
 }
