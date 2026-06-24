@@ -163,6 +163,11 @@ func validateSkillImages(skillImages []clawv1alpha1.SkillImageSpec, allNames map
 		if si.Image == "" {
 			return fmt.Errorf("skill image %q has empty image reference", si.Name)
 		}
+		for _, ps := range si.ImagePullSecrets {
+			if ps.Name == "" {
+				return fmt.Errorf("skill image %q has imagePullSecret with empty name", si.Name)
+			}
+		}
 	}
 	return nil
 }
