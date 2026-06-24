@@ -2262,6 +2262,22 @@ spec:
       Always follow FantaCo policy...
 ```
 
+### OCI Image Skills
+
+Skills can also be delivered as read-only OCI images mounted into `workspace/skills/<name>/`. Use `spec.skills.images` for image-based skills:
+
+```yaml
+spec:
+  skills:
+    images:
+      - name: private-skill
+        image: quay.io/corp/private-skill:1.0.0
+        imagePullSecrets:
+          - name: quay-pull-secret
+```
+
+`imagePullSecrets` are declared per image for convenience, but they are merged into the gateway pod's `imagePullSecrets` at reconcile time. Because Kubernetes resolves pull secrets at the pod level, they may be used to pull any image in the gateway pod, not only the skill image that declared them.
+
 ### Ownership Semantics
 
 - Skills are operator-managed — the content from the CR is written to the PVC on every pod restart, overwriting any changes made inside the pod.

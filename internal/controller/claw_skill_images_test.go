@@ -190,4 +190,122 @@ func TestConfigureSkillImages(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), ClawGatewayContainerName)
 	})
+
+	t.Run("should set imagePullSecrets from a single skill image", func(t *testing.T) {
+		objects := makeGatewayDeployment()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName},
+			Spec: clawv1alpha1.ClawSpec{
+				Skills: &clawv1alpha1.SkillsSpec{
+					Images: []clawv1alpha1.SkillImageSpec{
+						{
+							Name:  "private-skill",
+							Image: "quay.io/corp/private-skill:1.0.0",
+							ImagePullSecrets: []corev1.LocalObjectReference{
+								{Name: "quay-pull-secret"},
+							},
+						},
+					},
+				},
+			},
+		}
+		err := configureSkillImages(objects, instance)
+		require.NoError(t, err)
+
+		pullSecrets, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "imagePullSecrets")
+		require.Len(t, pullSecrets, 1)
+		assert.Equal(t, "quay-pull-secret", pullSecrets[0].(map[string]any)["name"])
+	})
+
+	t.Run("should merge imagePullSecrets from multiple skill images and deduplicate", func(t *testing.T) {
+		objects := makeGatewayDeployment()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName},
+			Spec: clawv1alpha1.ClawSpec{
+				Skills: &clawv1alpha1.SkillsSpec{
+					Images: []clawv1alpha1.SkillImageSpec{
+						{
+							Name:  "skill-a",
+							Image: "quay.io/corp/skill-a:1.0.0",
+							ImagePullSecrets: []corev1.LocalObjectReference{
+								{Name: "shared-secret"},
+								{Name: "secret-a"},
+							},
+						},
+						{
+							Name:  "skill-b",
+							Image: "quay.io/corp/skill-b:1.0.0",
+							ImagePullSecrets: []corev1.LocalObjectReference{
+								{Name: "shared-secret"},
+								{Name: "secret-b"},
+							},
+						},
+					},
+				},
+			},
+		}
+		err := configureSkillImages(objects, instance)
+		require.NoError(t, err)
+
+		pullSecrets, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "imagePullSecrets")
+		require.Len(t, pullSecrets, 3, "shared-secret should appear only once")
+		names := make([]string, 0, 3)
+		for _, ps := range pullSecrets {
+			names = append(names, ps.(map[string]any)["name"].(string))
+		}
+		assert.ElementsMatch(t, []string{"shared-secret", "secret-a", "secret-b"}, names)
+	})
+
+	t.Run("should preserve existing imagePullSecrets on the deployment", func(t *testing.T) {
+		objects := makeGatewayDeployment()
+		require.NoError(t, unstructured.SetNestedSlice(objects[0].Object,
+			[]any{map[string]any{"name": "existing-secret"}},
+			"spec", "template", "spec", "imagePullSecrets",
+		))
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName},
+			Spec: clawv1alpha1.ClawSpec{
+				Skills: &clawv1alpha1.SkillsSpec{
+					Images: []clawv1alpha1.SkillImageSpec{
+						{
+							Name:  "private-skill",
+							Image: "quay.io/corp/private-skill:1.0.0",
+							ImagePullSecrets: []corev1.LocalObjectReference{
+								{Name: "new-secret"},
+							},
+						},
+					},
+				},
+			},
+		}
+		err := configureSkillImages(objects, instance)
+		require.NoError(t, err)
+
+		pullSecrets, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "imagePullSecrets")
+		require.Len(t, pullSecrets, 2)
+		names := make([]string, 0, 2)
+		for _, ps := range pullSecrets {
+			names = append(names, ps.(map[string]any)["name"].(string))
+		}
+		assert.ElementsMatch(t, []string{"existing-secret", "new-secret"}, names)
+	})
+
+	t.Run("should not set imagePullSecrets when none specified", func(t *testing.T) {
+		objects := makeGatewayDeployment()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName},
+			Spec: clawv1alpha1.ClawSpec{
+				Skills: &clawv1alpha1.SkillsSpec{
+					Images: []clawv1alpha1.SkillImageSpec{
+						{Name: "public-skill", Image: "quay.io/corp/public-skill:1.0.0"},
+					},
+				},
+			},
+		}
+		err := configureSkillImages(objects, instance)
+		require.NoError(t, err)
+
+		_, exists, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "imagePullSecrets")
+		assert.False(t, exists, "imagePullSecrets should not be set when no pull secrets are specified")
+	})
 }

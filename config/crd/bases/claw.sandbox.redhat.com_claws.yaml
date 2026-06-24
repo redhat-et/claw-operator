@@ -940,6 +940,33 @@ spec:
                           description: Image is the OCI image reference (tag or digest).
                           minLength: 1
                           type: string
+                        imagePullSecrets:
+                          description: |-
+                            ImagePullSecrets is a list of references to Secrets in the same namespace
+                            used to pull this OCI skill image from a private registry.
+                            Secrets declared here are merged into the gateway pod's imagePullSecrets;
+                            because imagePullSecrets is a pod-level field, they may be used to pull
+                            any image in the gateway pod, not only this skill image.
+                          items:
+                            description: |-
+                              LocalObjectReference contains enough information to let you locate the
+                              referenced object inside the same namespace.
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
                         name:
                           description: |-
                             Name is the skill directory name under workspace/skills/.
