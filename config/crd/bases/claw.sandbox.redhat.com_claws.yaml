@@ -504,8 +504,8 @@ spec:
                 type: boolean
               logs:
                 description: |-
-                  Logs configures log forwarding via OTLP, forwarded through the
-                  OTel Collector sidecar to an external OTLP endpoint.
+                  Logs configures log forwarding via OTLP. The gateway sends logs directly
+                  to spec.logs.endpoint, or spec.traces.endpoint when not specified.
                 properties:
                   enabled:
                     description: Enabled activates log forwarding.
@@ -615,17 +615,19 @@ spec:
                   Map keys are server names as they appear in the mcp.servers config.
                 type: object
               metrics:
-                description: Metrics configures Prometheus metrics collection via
-                  an OTel Collector sidecar.
+                description: |-
+                  Metrics configures Prometheus metrics for the gateway. The gateway sends
+                  OTLP metrics to spec.traces.endpoint; a ServiceMonitor is created for
+                  Prometheus scraping when enabled.
                 properties:
                   enabled:
                     description: |-
-                      Enabled activates the OTel Collector sidecar and diagnostics.otel.metrics
-                      config injection.
+                      Enabled activates diagnostics.otel.metrics config injection. The gateway
+                      sends OTLP metrics to spec.traces.endpoint (shared with traces/logs).
                     type: boolean
                   port:
                     description: |-
-                      Port for the Prometheus metrics endpoint on the OTel Collector sidecar.
+                      Port for the Prometheus metrics endpoint exposed by the external OTel Collector.
                       Default: 9464.
                     format: int32
                     maximum: 65535
@@ -1010,8 +1012,8 @@ spec:
                 type: object
               traces:
                 description: |-
-                  Traces configures distributed tracing via OTLP, forwarded through the
-                  OTel Collector sidecar to an external OTLP endpoint.
+                  Traces configures distributed tracing via OTLP. The gateway sends spans
+                  directly to the specified external OTel Collector endpoint.
                 properties:
                   enabled:
                     description: Enabled activates trace collection and forwarding.
