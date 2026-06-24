@@ -210,7 +210,10 @@ func injectTelemetryEgressRules(
 	objects []*unstructured.Unstructured,
 	instance *clawv1alpha1.Claw,
 ) error {
-	targets := classifyTelemetryEndpoints(instance)
+	targets, err := classifyTelemetryEndpoints(instance)
+	if err != nil {
+		return err
+	}
 	if len(targets) == 0 {
 		return nil
 	}
@@ -246,7 +249,7 @@ func injectTelemetryEgressRules(
 	return fmt.Errorf("NetworkPolicy %q not found in manifests", npName)
 }
 
-func classifyTelemetryEndpoints(instance *clawv1alpha1.Claw) []egressTarget {
+func classifyTelemetryEndpoints(instance *clawv1alpha1.Claw) ([]egressTarget, error) {
 	seen := make(map[string]bool)
 	var targets []egressTarget
 
@@ -256,7 +259,7 @@ func classifyTelemetryEndpoints(instance *clawv1alpha1.Claw) []egressTarget {
 		}
 		target, err := classifyServiceURL(ep, instance.Namespace)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("invalid telemetry endpoint %q: %w", ep, err)
 		}
 		key := dedupKey(target)
 		if seen[key] {
@@ -266,7 +269,7 @@ func classifyTelemetryEndpoints(instance *clawv1alpha1.Claw) []egressTarget {
 		targets = append(targets, target)
 	}
 
-	return targets
+	return targets, nil
 }
 
 // buildCollectorConfig generates the OTel Collector YAML configuration
