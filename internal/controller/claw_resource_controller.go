@@ -67,7 +67,8 @@ const (
 	ClawConfigManagementEnvVar  = "CLAW_CONFIG_MANAGEMENT"
 	DefaultKubectlImage         = "quay.io/openshift/origin-cli:4.21"
 
-	OpenClawImageBase = "ghcr.io/openclaw/openclaw"
+	OpenClawImageBase      = "ghcr.io/openclaw/openclaw"
+	DefaultOpenClawVersion = "2026.6.10"
 
 	// OpenClaw JSON config keys shared across enrichment functions
 	configKeyGateway   = "gateway"
@@ -443,6 +444,10 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		logger.Error(err, "Failed to get Claw")
 		return ctrl.Result{}, err
+	}
+
+	if instance.Spec.Version == "" {
+		instance.Spec.Version = DefaultOpenClawVersion
 	}
 
 	// Short-circuit when idled — scale deployments to zero and return
@@ -961,6 +966,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	if err := configureSkillImages(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure skill images: %w", err)
 	}
+	if err := configureGatewayWholeHomeMount(objects, instance.Name); err != nil {
+		return fmt.Errorf("failed to configure gateway home mount: %w", err)
+	}
 	if err := configureUserManagedOpenClawFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure user-managed OpenClaw files: %w", err)
 	}
@@ -1297,7 +1305,7 @@ func injectProviders(config map[string]any, instance *clawv1alpha1.Claw) error {
 			}
 			entry := map[string]any{
 				"baseUrl":   vertexAIBaseURL(cred.GCP.Location),
-				"apiKey":    "gcp-vertex-credentials",
+				"apiKey":    "ah-ah-ah-you-didnt-say-the-magic-word",
 				"maxTokens": 128000,
 				"models":    []any{},
 			}

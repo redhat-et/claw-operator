@@ -324,8 +324,8 @@ func TestClawImageOverrideIntegration(t *testing.T) {
 
 		gateway := findContainer(deployment, ClawGatewayContainerName)
 		require.NotNil(t, gateway, "gateway container should exist")
-		assert.Equal(t, OpenClawImageBase+":2026.6.8", gateway.Image,
-			"should use Kustomize default when spec.version is empty")
+		assert.Equal(t, OpenClawImageBase+":"+DefaultOpenClawVersion, gateway.Image,
+			"should use default version when spec.version is empty")
 	})
 }
 
@@ -1191,6 +1191,7 @@ func TestConfigureUserManagedOpenClawFiles(t *testing.T) {
 		instance.Name = testInstanceName
 		instance.Spec.Config = &clawv1alpha1.ConfigSpec{Management: clawv1alpha1.ConfigManagementUser}
 
+		require.NoError(t, configureGatewayWholeHomeMount(objects, instance.Name))
 		require.NoError(t, configureUserManagedOpenClawFiles(objects, instance))
 
 		envMap := initConfigEnvMap(objects)
