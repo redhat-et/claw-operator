@@ -53,6 +53,7 @@ func pluginPackageName(spec string) string {
 // over implicit ones, allowing users to override the pinned version).
 func effectivePlugins(instance *clawv1alpha1.Claw) []string {
 	implicit := requiredProviderPlugins(instance)
+	implicit = append(implicit, requiredDiagnosticsPlugins(instance)...)
 	if len(implicit) == 0 {
 		return instance.Spec.Plugins
 	}
@@ -126,6 +127,17 @@ func injectProviderPlugins(config map[string]any, instance *clawv1alpha1.Claw) {
 			existingEntries[id] = map[string]any{"enabled": true}
 		}
 	}
+}
+
+func requiredDiagnosticsPlugins(instance *clawv1alpha1.Claw) []string {
+	var plugins []string
+	if tracesEnabled(instance) || logsEnabled(instance) {
+		plugins = append(plugins, "@openclaw/diagnostics-otel")
+	}
+	if metricsEnabled(instance) {
+		plugins = append(plugins, "@openclaw/diagnostics-prometheus")
+	}
+	return plugins
 }
 
 func generatePluginInstallScript(plugins []string) string {

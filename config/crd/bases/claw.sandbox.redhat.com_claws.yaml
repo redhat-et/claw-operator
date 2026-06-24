@@ -502,6 +502,20 @@ spec:
                   Idle, when set to true, instructs the operator to scale all managed
                   Deployments to zero replicas. Set to false (or omit) to run normally.
                 type: boolean
+              logs:
+                description: |-
+                  Logs configures log forwarding via OTLP, forwarded through the
+                  OTel Collector sidecar to an external OTLP endpoint.
+                properties:
+                  enabled:
+                    description: Enabled activates log forwarding.
+                    type: boolean
+                  endpoint:
+                    description: |-
+                      Endpoint is the OTLP HTTP endpoint to forward logs to.
+                      Defaults to the traces endpoint when not specified.
+                    type: string
+                type: object
               mcpServers:
                 additionalProperties:
                   description: McpServerSpec defines an MCP server the operator injects
@@ -993,6 +1007,27 @@ spec:
                     x-kubernetes-list-map-keys:
                     - name
                     x-kubernetes-list-type: map
+                type: object
+              traces:
+                description: |-
+                  Traces configures distributed tracing via OTLP, forwarded through the
+                  OTel Collector sidecar to an external OTLP endpoint.
+                properties:
+                  enabled:
+                    description: Enabled activates trace collection and forwarding.
+                    type: boolean
+                  endpoint:
+                    description: |-
+                      Endpoint is the OTLP HTTP endpoint to forward traces to
+                      (e.g., "http://otel-collector.observability.svc:4318").
+                    type: string
+                  samplingRatio:
+                    description: |-
+                      SamplingRatio controls the trace sampling rate as a string
+                      between "0" and "1" (e.g., "0.1" for 10% sampling).
+                      Default: "1" (sample all traces).
+                    pattern: ^(0(\.\d+)?|1(\.0+)?)$
+                    type: string
                 type: object
               version:
                 description: |-

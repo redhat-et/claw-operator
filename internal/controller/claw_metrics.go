@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -144,23 +143,8 @@ func configureMetricsSidecar(
 
 // injectOTelCollectorConfig adds the otel-collector.yaml key to the gateway ConfigMap.
 func injectOTelCollectorConfig(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
-	port := metricsPort(instance)
 	configMapName := getConfigMapName(instance.Name)
-
-	collectorConfig := `receivers:
-  otlp:
-    protocols:
-      http:
-        endpoint: 127.0.0.1:4318
-exporters:
-  prometheus:
-    endpoint: 0.0.0.0:` + strconv.Itoa(int(port)) + `
-service:
-  pipelines:
-    metrics:
-      receivers: [otlp]
-      exporters: [prometheus]
-`
+	collectorConfig := buildCollectorConfig(instance)
 
 	for _, obj := range objects {
 		if obj.GetKind() != ConfigMapKind || obj.GetName() != configMapName {
