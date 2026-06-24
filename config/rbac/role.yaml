@@ -27,12 +27,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods/exec
-  verbs:
-  - create
-- apiGroups:
-  - ""
-  resources:
   - serviceaccounts
   - services
   verbs:

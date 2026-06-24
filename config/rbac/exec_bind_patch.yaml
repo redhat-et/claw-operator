@@ -1,0 +1,20 @@
+# exec_bind_patch.yaml
+# Manually maintained: adds a resourceNames-restricted bind permission to the manager-role
+# ClusterRole. This cannot be expressed via kubebuilder markers (controller-gen does not
+# support resourceNames). This patch must survive make manifests — it is applied by kustomize
+# at deploy time, not embedded in role.yaml.
+- op: add
+  path: /rules/-
+  value:
+    apiGroups:
+    - rbac.authorization.k8s.io
+    resources:
+    - clusterroles
+    # resourceNames must match the kustomize-prefixed ClusterRole name.
+    # If namePrefix changes from "claw-operator-", update this value,
+    # EXEC_CLUSTER_ROLE_NAME in config/manager/manager.yaml, and
+    # DefaultExecClusterRoleName in internal/controller/claw_exec_rbac.go to match.
+    resourceNames:
+    - claw-operator-exec-role
+    verbs:
+    - bind

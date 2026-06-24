@@ -63,7 +63,6 @@ type ClawDevicePairingRequestReconciler struct {
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=clawdevicepairingrequests/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=clawdevicepairingrequests/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list
-// +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

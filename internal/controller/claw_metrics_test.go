@@ -876,10 +876,13 @@ func TestMetricsIntegration(t *testing.T) {
 
 		customImage := "my-registry.io/otel/collector:v1.0.0"
 		reconciler := &ClawResourceReconciler{
-			Client:             k8sClient,
-			Scheme:             k8sClient.Scheme(),
-			UserSecretReader:   k8sClient,
-			OTelCollectorImage: customImage,
+			Client:              k8sClient,
+			Scheme:              k8sClient.Scheme(),
+			UserSecretReader:    k8sClient,
+			OTelCollectorImage:  customImage,
+			OperatorNamespace:   "test-operator-ns",
+			OperatorSAName:      "test-operator-sa",
+			ExecClusterRoleName: "test-exec-role",
 		}
 		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
 

@@ -18,10 +18,13 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -256,15 +259,23 @@ func main() {
 	}
 
 	clawReconciler := &controller.ClawResourceReconciler{
-		Client:             mgr.GetClient(),
-		Scheme:             mgr.GetScheme(),
-		UserSecretReader:   controller.NewLoggingUserSecretReader(mgr.GetAPIReader()),
-		ProxyImage:         os.Getenv("PROXY_IMAGE"),
-		KubectlImage:       os.Getenv("KUBECTL_IMAGE"),
-		OTelCollectorImage: os.Getenv("OTEL_COLLECTOR_IMAGE"),
-		ImagePullPolicy:    imagePullPolicy,
-		MetricsRefreshed:   make(chan struct{}),
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		UserSecretReader:    controller.NewLoggingUserSecretReader(mgr.GetAPIReader()),
+		ProxyImage:          os.Getenv("PROXY_IMAGE"),
+		KubectlImage:        os.Getenv("KUBECTL_IMAGE"),
+		OTelCollectorImage:  os.Getenv("OTEL_COLLECTOR_IMAGE"),
+		ImagePullPolicy:     imagePullPolicy,
+		OperatorNamespace:   getOperatorNamespace(),
+		OperatorSAName:      getOperatorSAName(),
+		ExecClusterRoleName: getEnvOrDefault("EXEC_CLUSTER_ROLE_NAME", controller.DefaultExecClusterRoleName),
+		MetricsRefreshed:    make(chan struct{}),
 	}
+	setupLog.Info("operator identity resolved",
+		"namespace", clawReconciler.OperatorNamespace,
+		"serviceAccount", clawReconciler.OperatorSAName,
+		"execClusterRole", clawReconciler.ExecClusterRoleName,
+	)
 	if err = clawReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Claw")
 		os.Exit(1)
@@ -319,6 +330,70 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func getOperatorNamespace() string {
+	if ns := os.Getenv("OPERATOR_NAMESPACE"); ns != "" {
+		return ns
+	}
+	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	return "claw-operator-system"
+}
+
+func getOperatorSAName() string {
+	if name := os.Getenv("OPERATOR_SA_NAME"); name != "" {
+		return name
+	}
+	// spec.serviceAccountName downward API is unreliable on some OpenShift versions.
+	// Fall back to parsing the projected SA token JWT — the kubernetes.io claim always
+	// contains the service account name regardless of cluster variant.
+	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
+		if name := saNameFromToken(string(data)); name != "" {
+			return name
+		}
+	}
+	return "claw-operator-controller-manager"
+}
+
+// getEnvOrDefault returns the value of the environment variable named by key, or defaultVal
+// if the variable is unset or empty.
+func getEnvOrDefault(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultVal
+}
+
+// saNameFromToken extracts the service account name from a Kubernetes bound SA JWT token
+// without signature verification (we trust the in-cluster mount).
+func saNameFromToken(token string) string {
+	parts := strings.SplitN(token, ".", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return ""
+	}
+	// Kubernetes bound tokens (1.22+) nest SA info under "kubernetes.io".
+	if k8s, ok := claims["kubernetes.io"].(map[string]interface{}); ok {
+		if sa, ok := k8s["serviceaccount"].(map[string]interface{}); ok {
+			if name, ok := sa["name"].(string); ok {
+				return name
+			}
+		}
+	}
+	// Legacy non-bound tokens use a flat top-level claim.
+	if name, ok := claims["kubernetes.io/serviceaccount/service-account.name"].(string); ok {
+		return name
+	}
+	return ""
 }
 
 var validImagePullPolicies = map[string]bool{

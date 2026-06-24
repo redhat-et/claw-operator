@@ -73,6 +73,16 @@ spec:
             value: quay.io/openshift/origin-cli:4.21
           - name: OTEL_COLLECTOR_IMAGE
             value: mirror.gcr.io/otel/opentelemetry-collector:0.152.1
+          - name: OPERATOR_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: OPERATOR_SA_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.serviceAccountName
+          - name: EXEC_CLUSTER_ROLE_NAME
+            value: "claw-operator-exec-role"
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

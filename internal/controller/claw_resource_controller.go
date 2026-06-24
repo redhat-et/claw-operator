@@ -393,11 +393,14 @@ type ClawResourceReconciler struct {
 	// UserSecretReader reads user-owned Secrets directly from the API server,
 	// bypassing the informer cache (where Transform has stripped .Data).
 	// Operator-owned Secrets keep full .Data in cache and use r.Get().
-	UserSecretReader   client.Reader
-	ProxyImage         string
-	KubectlImage       string
-	OTelCollectorImage string
-	ImagePullPolicy    string
+	UserSecretReader    client.Reader
+	ProxyImage          string
+	KubectlImage        string
+	OTelCollectorImage  string
+	ImagePullPolicy     string
+	OperatorNamespace   string // namespace the operator SA lives in
+	OperatorSAName      string // name of the operator's ServiceAccount
+	ExecClusterRoleName string // name of the ClusterRole granting pods/exec; defaults to defaultExecClusterRoleName
 	// MetricsRefreshed is closed by Start() after the initial metrics refresh.
 	// Reconcile() waits on it so no reconciliation runs before metrics are populated.
 	MetricsRefreshed chan struct{}
@@ -466,6 +469,17 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Clean up device-pairing deployment resources from previous operator versions
 	if err := r.cleanupDevicePairingResources(ctx, instance); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to clean up device-pairing resources: %w", err)
+	}
+
+	// Create or update a namespace-scoped RoleBinding that grants pods/exec only in this namespace.
+	// This replaces the former cluster-wide pods/exec ClusterRole permission.
+	if err := r.reconcileExecRoleBinding(ctx, instance); err != nil {
+		setCondition(instance, clawv1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			clawv1alpha1.ConditionReasonValidationFailed, err.Error())
+		if statusErr := r.Status().Update(ctx, instance); statusErr != nil {
+			logger.Error(statusErr, "Failed to update status after exec RoleBinding failure")
+		}
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile exec RoleBinding: %w", err)
 	}
 
 	// Create or update the gateway Secret with token
