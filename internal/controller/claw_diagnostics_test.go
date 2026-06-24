@@ -17,7 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -244,93 +243,6 @@ func TestInjectOTelEnvVars(t *testing.T) {
 		err := injectOTelEnvVars(objects, instance)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
-	})
-}
-
-func TestBuildCollectorConfig(t *testing.T) {
-	t.Run("metrics only", func(t *testing.T) {
-		instance := testClawWithMetrics(true, nil)
-
-		config := buildCollectorConfig(instance)
-
-		assert.Contains(t, config, "prometheus:")
-		assert.Contains(t, config, "0.0.0.0:9464")
-		assert.Contains(t, config, "metrics:")
-		assert.NotContains(t, config, "traces:")
-		assert.NotContains(t, config, "otlp_http")
-	})
-
-	t.Run("traces only", func(t *testing.T) {
-		instance := testClawWithTraces("http://tempo.obs.svc:4318", "")
-
-		config := buildCollectorConfig(instance)
-
-		assert.Contains(t, config, "otlp_http:")
-		assert.Contains(t, config, "http://tempo.obs.svc:4318")
-		assert.Contains(t, config, "traces:")
-		assert.NotContains(t, config, "prometheus:")
-		assert.NotContains(t, config, "metrics:")
-	})
-
-	t.Run("logs only", func(t *testing.T) {
-		instance := testClawWithLogs("http://loki.obs.svc:4318")
-
-		config := buildCollectorConfig(instance)
-
-		assert.Contains(t, config, "otlp_http:")
-		assert.Contains(t, config, "http://loki.obs.svc:4318")
-		assert.Contains(t, config, "logs:")
-		assert.NotContains(t, config, "traces:")
-	})
-
-	t.Run("all signals same endpoint", func(t *testing.T) {
-		instance := testClawWithTraces("http://collector.svc:4318", "")
-		instance.Spec.Logs = &clawv1alpha1.LogsSpec{Enabled: true}
-		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{Enabled: true}
-
-		config := buildCollectorConfig(instance)
-
-		assert.Contains(t, config, "prometheus:")
-		assert.Contains(t, config, "otlp_http:")
-		assert.Contains(t, config, "metrics:")
-		assert.Contains(t, config, "traces:")
-		assert.Contains(t, config, "logs:")
-		assert.NotContains(t, config, "otlp_http/traces")
-		assert.NotContains(t, config, "otlp_http/logs")
-	})
-
-	t.Run("traces and logs with different endpoints", func(t *testing.T) {
-		instance := testClawWithTraces("http://tempo:4318", "")
-		instance.Spec.Logs = &clawv1alpha1.LogsSpec{
-			Enabled:  true,
-			Endpoint: "http://loki:4318",
-		}
-
-		config := buildCollectorConfig(instance)
-
-		assert.Contains(t, config, "otlp_http/traces:")
-		assert.Contains(t, config, "http://tempo:4318")
-		assert.Contains(t, config, "otlp_http/logs:")
-		assert.Contains(t, config, "http://loki:4318")
-
-		lines := strings.Split(config, "\n")
-		var tracesPipeline, logsPipeline bool
-		for _, line := range lines {
-			if strings.Contains(line, "exporters: [otlp_http/traces]") {
-				tracesPipeline = true
-			}
-			if strings.Contains(line, "exporters: [otlp_http/logs]") {
-				logsPipeline = true
-			}
-		}
-		assert.True(t, tracesPipeline, "traces pipeline should use otlp_http/traces exporter")
-		assert.True(t, logsPipeline, "logs pipeline should use otlp_http/logs exporter")
-	})
-
-	t.Run("always has otlp receiver", func(t *testing.T) {
-		instance := testClawWithMetrics(true, nil)
-		config := buildCollectorConfig(instance)
-		assert.Contains(t, config, "127.0.0.1:4318")
 	})
 }
 

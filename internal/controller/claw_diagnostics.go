@@ -18,7 +18,6 @@ package controller
 
 import (
 	"fmt"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -111,7 +110,6 @@ func injectDiagnosticsConfig(config map[string]any, instance *clawv1alpha1.Claw)
 	if logsOn {
 		otel["logs"] = true
 	}
-	// Point directly at the external OTel Collector (not the removed sidecar).
 	if _, set := otel["endpoint"]; !set {
 		if ep := tracesEndpoint(instance); ep != "" {
 			otel["endpoint"] = ep
@@ -276,71 +274,4 @@ func classifyTelemetryEndpoints(instance *clawv1alpha1.Claw) ([]egressTarget, er
 	}
 
 	return targets, nil
-}
-
-// buildCollectorConfig generates the OTel Collector YAML configuration
-// based on which signals (metrics, traces, logs) are enabled.
-func buildCollectorConfig(instance *clawv1alpha1.Claw) string {
-	port := metricsPort(instance)
-	tEp := tracesEndpoint(instance)
-	lEp := logsEndpoint(instance)
-	hasMetrics := metricsEnabled(instance)
-	hasTraces := tracesEnabled(instance) && tEp != ""
-	hasLogs := logsEnabled(instance) && lEp != ""
-
-	var b strings.Builder
-	b.WriteString("receivers:\n")
-	b.WriteString("  otlp:\n")
-	b.WriteString("    protocols:\n")
-	b.WriteString("      http:\n")
-	b.WriteString("        endpoint: 127.0.0.1:4318\n")
-
-	b.WriteString("exporters:\n")
-	if hasMetrics {
-		fmt.Fprintf(&b, "  prometheus:\n    endpoint: 0.0.0.0:%d\n", port)
-	}
-
-	sameEndpoint := hasTraces && hasLogs && tEp == lEp
-	if hasTraces && hasLogs && !sameEndpoint {
-		fmt.Fprintf(&b, "  otlp_http/traces:\n    endpoint: %s\n", tEp)
-		fmt.Fprintf(&b, "  otlp_http/logs:\n    endpoint: %s\n", lEp)
-	} else if hasTraces || hasLogs {
-		ep := tEp
-		if ep == "" {
-			ep = lEp
-		}
-		fmt.Fprintf(&b, "  otlp_http:\n    endpoint: %s\n", ep)
-	}
-
-	b.WriteString("service:\n")
-	b.WriteString("  pipelines:\n")
-	if hasMetrics {
-		b.WriteString("    metrics:\n")
-		b.WriteString("      receivers: [otlp]\n")
-		b.WriteString("      exporters: [prometheus]\n")
-	}
-	if hasTraces {
-		b.WriteString("    traces:\n")
-		b.WriteString("      receivers: [otlp]\n")
-		if sameEndpoint {
-			b.WriteString("      exporters: [otlp_http]\n")
-		} else if hasLogs {
-			b.WriteString("      exporters: [otlp_http/traces]\n")
-		} else {
-			b.WriteString("      exporters: [otlp_http]\n")
-		}
-	}
-	if hasLogs {
-		b.WriteString("    logs:\n")
-		b.WriteString("      receivers: [otlp]\n")
-		if sameEndpoint {
-			b.WriteString("      exporters: [otlp_http]\n")
-		} else if hasTraces {
-			b.WriteString("      exporters: [otlp_http/logs]\n")
-		} else {
-			b.WriteString("      exporters: [otlp_http]\n")
-		}
-	}
-
-	return b.String()
 }
