@@ -1120,14 +1120,14 @@ spec:
                 type: object
             type: object
             x-kubernetes-validations:
-            - message: spec.traces.endpoint is required when spec.traces.enabled is
-                true
-              rule: '!has(self.traces) || !self.traces.enabled || self.traces.endpoint
-                != '''''
-            - message: spec.logs requires either spec.logs.endpoint or spec.traces.endpoint
-                when enabled
-              rule: '!has(self.logs) || !self.logs.enabled || self.logs.endpoint !=
-                '''' || (has(self.traces) && self.traces.endpoint != '''')'
+            - message: ”spec.traces.endpoint is required when spec.traces.enabled
+                is true”
+              rule: ”!has(self.traces) || !self.traces.enabled || self.traces.endpoint
+                != ''”
+            - message: ”spec.logs requires either spec.logs.endpoint or spec.traces.endpoint
+                when enabled”
+              rule: ”!has(self.logs) || !self.logs.enabled || self.logs.endpoint !=
+                '' || (has(self.traces) && self.traces.endpoint != '')”
           status:
             description: ClawStatus defines the observed state of Claw
             properties:
