@@ -54,21 +54,13 @@ func tracesSamplingRatio(instance *clawv1alpha1.Claw) string {
 	return "1"
 }
 
-func otelSidecarNeeded(instance *clawv1alpha1.Claw) bool {
-	return metricsEnabled(instance) || tracesEnabled(instance) || logsEnabled(instance)
-}
-
-// injectObservabilityResources handles OTel collector config, metrics Service/NP,
-// and telemetry egress rules.
+// injectObservabilityResources handles metrics Service/NP and telemetry egress rules.
+// The OTel Collector is expected to be deployed externally (e.g., via the OTel Operator);
+// the gateway sends OTLP directly to it via OTEL_EXPORTER_OTLP_ENDPOINT.
 func injectObservabilityResources(
 	objects []*unstructured.Unstructured,
 	instance *clawv1alpha1.Claw,
 ) error {
-	if otelSidecarNeeded(instance) {
-		if err := injectOTelCollectorConfig(objects, instance); err != nil {
-			return fmt.Errorf("failed to inject OTel collector config: %w", err)
-		}
-	}
 	if metricsEnabled(instance) {
 		if err := addMetricsPortToService(objects, instance); err != nil {
 			return fmt.Errorf("failed to add metrics port to Service: %w", err)
@@ -85,8 +77,9 @@ func injectObservabilityResources(
 	return nil
 }
 
-// injectDiagnosticsConfig injects diagnostics.otel config keys for the
-// OTel Collector sidecar when traces or logs are enabled.
+// injectDiagnosticsConfig injects diagnostics.otel config keys when traces or
+// logs are enabled. The endpoint is set to spec.traces.endpoint — the gateway
+// sends OTLP directly to an externally-deployed OTel Collector.
 func injectDiagnosticsConfig(config map[string]any, instance *clawv1alpha1.Claw) {
 	tracesOn := tracesEnabled(instance)
 	logsOn := logsEnabled(instance)
@@ -112,8 +105,11 @@ func injectDiagnosticsConfig(config map[string]any, instance *clawv1alpha1.Claw)
 	if logsOn {
 		otel["logs"] = true
 	}
+	// Point directly at the external OTel Collector (not the removed sidecar).
 	if _, set := otel["endpoint"]; !set {
-		otel["endpoint"] = "http://localhost:4318"
+		if ep := tracesEndpoint(instance); ep != "" {
+			otel["endpoint"] = ep
+		}
 	}
 }
 
@@ -157,6 +153,11 @@ func injectOTelEnvVars(
 				"OTEL_RESOURCE_ATTRIBUTES",
 				"service.instance.id=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE)",
 			)
+
+			// Point the SDK at the external OTel Collector directly.
+			if ep := tracesEndpoint(instance); ep != "" {
+				envVars = setOrAppendEnv(envVars, "OTEL_EXPORTER_OTLP_ENDPOINT", ep)
+			}
 
 			if tracesEnabled(instance) {
 				envVars = setOrAppendEnv(envVars,

@@ -393,11 +393,10 @@ type ClawResourceReconciler struct {
 	// UserSecretReader reads user-owned Secrets directly from the API server,
 	// bypassing the informer cache (where Transform has stripped .Data).
 	// Operator-owned Secrets keep full .Data in cache and use r.Get().
-	UserSecretReader   client.Reader
-	ProxyImage         string
-	KubectlImage       string
-	OTelCollectorImage string
-	ImagePullPolicy    string
+	UserSecretReader client.Reader
+	ProxyImage       string
+	KubectlImage     string
+	ImagePullPolicy  string
 	// MetricsRefreshed is closed by Start() after the initial metrics refresh.
 	// Reconcile() waits on it so no reconciliation runs before metrics are populated.
 	MetricsRefreshed chan struct{}
@@ -933,10 +932,7 @@ func (r *ClawResourceReconciler) configureDeployments(
 	if err := configureClawDeploymentForAuth(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure gateway for auth: %w", err)
 	}
-	if otelSidecarNeeded(instance) {
-		if err := configureMetricsSidecar(objects, instance, r.OTelCollectorImage); err != nil {
-			return fmt.Errorf("failed to configure OTel sidecar: %w", err)
-		}
+	if tracesEnabled(instance) || logsEnabled(instance) || metricsEnabled(instance) {
 		if err := injectOTelEnvVars(objects, instance); err != nil {
 			return fmt.Errorf("failed to inject OTel env vars: %w", err)
 		}

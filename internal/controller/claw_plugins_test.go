@@ -702,7 +702,7 @@ func TestPluginsIntegration(t *testing.T) {
 		t.Fatal("init-plugins container not found")
 	})
 
-	t.Run("should coexist with metrics sidecar", func(t *testing.T) {
+	t.Run("should coexist with metrics enabled", func(t *testing.T) {
 		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
 
 		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
@@ -720,8 +720,7 @@ func TestPluginsIntegration(t *testing.T) {
 		}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
-		reconciler := createClawReconciler()
-		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+		reconcileClaw(t, ctx, createClawReconciler(), testInstanceName, namespace)
 
 		deployment := &appsv1.Deployment{}
 		waitFor(t, timeout, interval, func() bool {
@@ -731,19 +730,16 @@ func TestPluginsIntegration(t *testing.T) {
 			}, deployment) == nil
 		}, "Deployment should be created")
 
-		var hasPluginsInit, hasOtelSidecar bool
+		var hasPluginsInit bool
 		for _, ic := range deployment.Spec.Template.Spec.InitContainers {
 			if ic.Name == PluginsInitContainerName {
 				hasPluginsInit = true
 			}
 		}
-		for _, c := range deployment.Spec.Template.Spec.Containers {
-			if c.Name == OTelCollectorContainerName {
-				hasOtelSidecar = true
-			}
-		}
 		assert.True(t, hasPluginsInit, "should have init-plugins container")
-		assert.True(t, hasOtelSidecar, "should have otel-collector sidecar")
+		for _, c := range deployment.Spec.Template.Spec.Containers {
+			assert.NotEqual(t, "otel-collector", c.Name, "no sidecar expected without Instrumentation CR")
+		}
 	})
 
 	t.Run("should change config hash when plugins change", func(t *testing.T) {
