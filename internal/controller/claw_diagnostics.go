@@ -61,6 +61,12 @@ func injectObservabilityResources(
 	objects []*unstructured.Unstructured,
 	instance *clawv1alpha1.Claw,
 ) error {
+	if tracesEnabled(instance) && tracesEndpoint(instance) == "" {
+		return fmt.Errorf("spec.traces.endpoint is required when spec.traces.enabled is true")
+	}
+	if logsEnabled(instance) && logsEndpoint(instance) == "" {
+		return fmt.Errorf("spec.logs requires either spec.logs.endpoint or spec.traces.endpoint when enabled")
+	}
 	if metricsEnabled(instance) {
 		if err := addMetricsPortToService(objects, instance); err != nil {
 			return fmt.Errorf("failed to add metrics port to Service: %w", err)
