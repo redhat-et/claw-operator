@@ -1,0 +1,21 @@
+apiVersion: claw.sandbox.redhat.com/v1alpha1
+kind: Claw
+metadata:
+  name: openshell-instance
+spec:
+  # OpenShell mode requires an OpenClaw image containing the OpenShell CLI.
+  image: quay.io/sallyom/openclaw:openshell
+  credentials:
+    - name: openai
+      type: bearer
+      secretRef:
+        - name: openai-api-key
+          key: api-key
+      provider: openai
+  openshell:
+    enabled: true
+    gatewayRef:
+      name: openshell
+      namespace: openshell-alice
+    sandboxImage: quay.io/sallyom/openclaw-openshell-sandbox:latest
+    mode: remote

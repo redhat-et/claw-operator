@@ -1,0 +1,8 @@
+apiVersion: claw.sandbox.redhat.com/v1alpha1
+kind: OpenShellGateway
+metadata:
+  name: openshell
+spec:
+  sandboxImage: quay.io/sallyom/openclaw-openshell-sandbox:latest
+  openShift:
+    privilegedSandboxSCC: true
