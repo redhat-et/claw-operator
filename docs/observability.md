@@ -610,10 +610,18 @@ Log forwarding is functional as-is — the collector receives OTLP logs from the
 
 ### Prerequisites
 
-OpenShift Logging 6.5+ (OTLP ingestion is GA). Install both operators:
+OpenShift Logging 6.5+ (OTLP ingestion is GA). The Loki and Logging operators install into `openshift-operators-redhat`, which requires an OperatorGroup first:
 
 ```sh
+# Ensure the OperatorGroup exists (idempotent)
 cat <<EOF | oc apply -f -
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-operators-redhat
+  namespace: openshift-operators-redhat
+spec: {}
+---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
@@ -638,6 +646,12 @@ spec:
   sourceNamespace: openshift-marketplace
   installPlanApproval: Automatic
 EOF
+```
+
+Wait for both to reach `Succeeded`:
+
+```sh
+oc get csv -n openshift-operators-redhat | grep -E "loki|logging"
 ```
 
 ### Deploy LokiStack
@@ -668,6 +682,7 @@ metadata:
   namespace: $NS
 spec:
   size: 1x.extra-small
+  storageClassName: gp3-csi   # required; use your cluster's default storage class
   storage:
     schemas:
     - version: v13
@@ -686,32 +701,80 @@ spec:
           - name: "k8s.pod.name"
           - name: "k8s.container.name"
           - name: "service.name"
+  # If your cluster has infra nodes with NoSchedule taints, add tolerations
+  # so LokiStack components can schedule there when worker nodes are full:
+  template:
+    compactor:
+      tolerations: [{key: "node-role.kubernetes.io/infra", operator: "Exists", effect: "NoSchedule"}]
+    distributor:
+      tolerations: [{key: "node-role.kubernetes.io/infra", operator: "Exists", effect: "NoSchedule"}]
+    gateway:
+      tolerations: [{key: "node-role.kubernetes.io/infra", operator: "Exists", effect: "NoSchedule"}]
+    indexGateway:
+      tolerations: [{key: "node-role.kubernetes.io/infra", operator: "Exists", effect: "NoSchedule"}]
+    ingester:
+      tolerations: [{key: "node-role.kubernetes.io/infra", operator: "Exists", effect: "NoSchedule"}]
+    querier:
+      tolerations: [{key: "node-role.kubernetes.io/infra", operator: "Exists", effect: "NoSchedule"}]
+    queryFrontend:
+      tolerations: [{key: "node-role.kubernetes.io/infra", operator: "Exists", effect: "NoSchedule"}]
+    ruler:
+      tolerations: [{key: "node-role.kubernetes.io/infra", operator: "Exists", effect: "NoSchedule"}]
 EOF
 ```
 
-### Point the collector at LokiStack
+### Forward logs to LokiStack via ClusterLogForwarder
 
-Once LokiStack is ready, add the Loki OTLP exporter to the collector's logs pipeline. This is the only change needed — the collector CR is updated in place:
+Log collection into LokiStack is done by the **ClusterLogForwarder** (CLF), a DaemonSet of vector agents that collect pod logs node-locally and push them to LokiStack over OTLP. This is the right tool for log aggregation — the OTel Collector is for traces, not log collection.
 
-```yaml
-# Add to spec.config.exporters:
-exporters:
-  otlphttp/loki:
-    endpoint: https://logging-loki-gateway.$NS.svc:8080/otlp
+First, create a ServiceAccount and grant it the required collection roles:
+
+```sh
+oc create sa collector -n $NS
+oc adm policy add-cluster-role-to-user collect-application-logs -z collector -n $NS
+oc adm policy add-cluster-role-to-user logging-collector-logs-writer -z collector -n $NS
+```
+
+Then deploy the ClusterLogForwarder. The `tls.ca` field is required to trust the LokiStack gateway's OpenShift service-serving certificate:
+
+```sh
+cat <<EOF | oc apply -f -
+apiVersion: observability.openshift.io/v1
+kind: ClusterLogForwarder
+metadata:
+  name: collector
+  namespace: $NS
+spec:
+  serviceAccount:
+    name: collector
+  outputs:
+  - name: loki-app
+    type: lokiStack
+    lokiStack:
+      target:
+        name: logging-loki
+        namespace: $NS
+      authentication:
+        token:
+          from: serviceAccount
+      dataModel: Otel
     tls:
-      ca_file: /etc/openshift-ca/service-ca.crt
-    auth:
-      authenticator: bearertokenauth
-    headers:
-      X-Scope-OrgID: "application"
-
-# Update the logs pipeline in spec.config.service.pipelines:
-service:
+      ca:
+        configMapName: openshift-service-ca.crt
+        key: service-ca.crt
   pipelines:
-    logs:
-      receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [otlphttp/loki, debug]
+  - name: app-logs
+    inputRefs: [application]
+    outputRefs: [loki-app]
+EOF
+```
+
+Verify the CLF collectors are running and writing successfully:
+
+```sh
+oc get pods -n $NS -l app.kubernetes.io/component=collector
+oc logs -n $NS -l app.kubernetes.io/component=collector --tail=5
+# Healthy output: no WARN/error lines; vector starts quietly
 ```
 
 ### Enable the Logging UI Plugin
