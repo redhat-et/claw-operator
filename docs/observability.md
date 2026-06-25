@@ -120,9 +120,12 @@ export NS=my-claw-namespace
 
 ### Deploy TempoMonolithic (trace storage)
 
-For development and testing, use the in-memory backend. For production, configure S3-compatible object storage.
+Multi-tenancy is required by the OpenShift Console distributed tracing UI plugin. Set `tenantName` to any label for your environment (e.g. `dev`). For production use S3-compatible object storage.
 
 ```sh
+# Choose a tenant name — used in X-Scope-OrgID headers and RBAC rules
+export TENANT=dev
+
 cat <<EOF | oc apply -f -
 apiVersion: tempo.grafana.com/v1alpha1
 kind: TempoMonolithic
@@ -133,6 +136,16 @@ spec:
   storage:
     traces:
       backend: memory   # use s3/gcs/azure for production
+  multitenancy:
+    enabled: true
+    mode: openshift
+    authentication:
+    - tenantName: $TENANT
+      tenantId: "$(uuidgen | tr '[:upper:]' '[:lower:]')"
+    resources:
+      total:
+        limits:
+          memory: 500Mi
   resources:
     total:
       limits:
@@ -143,7 +156,9 @@ EOF
 
 ### Grant RBAC for the OTel Collector
 
-The `k8s_attributes` processor enriches spans with pod/namespace/deployment metadata and needs read access to those resources.
+Two sets of RBAC are needed: one for the `k8s_attributes` processor (reads pod/namespace metadata) and one for writing traces to the Tempo tenant.
+
+The Tempo gateway uses SubjectAccessReview to authorise writes. The required rule grants `create` on the `<tenantName>` resource within the `tempo.grafana.com` API group.
 
 ```sh
 cat <<EOF | oc apply -f -
@@ -171,12 +186,52 @@ roleRef:
   kind: ClusterRole
   name: otel-collector-k8sattributes-$NS
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tempo-traces-write-$TENANT
+rules:
+- apiGroups:
+  - tempo.grafana.com
+  resources:
+  - tempomonolithics
+  - "tempomonolithics/api/traces/v1/$TENANT"
+  - $TENANT
+  resourceNames:
+  - tempo
+  verbs:
+  - get
+  - create
+  - update
+- apiGroups:
+  - tempo.grafana.com
+  resources:
+  - $TENANT
+  verbs:
+  - create
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tempo-traces-write-$TENANT-otel-collector
+subjects:
+- kind: ServiceAccount
+  name: otel-collector
+  namespace: $NS
+roleRef:
+  kind: ClusterRole
+  name: tempo-traces-write-$TENANT
+  apiGroup: rbac.authorization.k8s.io
 EOF
 ```
 
 ### Deploy the OTel Collector
 
-The collector receives OTLP from the gateway on port 4318, enriches spans with Kubernetes metadata, and forwards traces to Tempo.
+The collector receives OTLP from the gateway on port 4318, enriches spans with Kubernetes metadata, and forwards traces to Tempo through the multi-tenant gateway. It authenticates using the pod's service account token and the `X-Scope-OrgID` header identifies the tenant.
+
+The Tempo gateway uses a certificate signed by the OpenShift service CA. The `openshift-service-ca.crt` ConfigMap is automatically injected into every namespace.
 
 ```sh
 cat <<EOF | oc apply -f -
@@ -187,7 +242,18 @@ metadata:
   namespace: $NS
 spec:
   mode: deployment
+  volumes:
+  - name: openshift-service-ca
+    configMap:
+      name: openshift-service-ca.crt
+  volumeMounts:
+  - name: openshift-service-ca
+    mountPath: /etc/openshift-ca
+    readOnly: true
   config:
+    extensions:
+      bearertokenauth:
+        filename: /var/run/secrets/kubernetes.io/serviceaccount/token
     receivers:
       otlp:
         protocols:
@@ -213,12 +279,18 @@ spec:
             - k8s.deployment.name
     exporters:
       otlp_grpc:
-        endpoint: tempo-tempo.$NS.svc:4317
+        endpoint: tempo-tempo-gateway.$NS.svc:4317
         tls:
-          insecure: true
+          ca_file: /etc/openshift-ca/service-ca.crt
+          server_name_override: tempo-tempo-gateway.$NS.svc
+        auth:
+          authenticator: bearertokenauth
+        headers:
+          X-Scope-OrgID: "$TENANT"
       debug:
         verbosity: basic
     service:
+      extensions: [bearertokenauth]
       pipelines:
         traces:
           receivers: [otlp]
@@ -237,7 +309,7 @@ Verify everything is running:
 oc get pods -n $NS | grep -E "otel|tempo"
 # Expected:
 # otel-collector-<hash>   1/1   Running
-# tempo-tempo-0           3/3   Running
+# tempo-tempo-0           3/3   Running  (tempo + tempo-gateway + tempo-gateway-opa containers)
 ```
 
 ## Enable Observability on a Claw Instance
@@ -416,14 +488,16 @@ curl -s -o /dev/null -w "%{http_code}" \
 # Expected: 200
 ```
 
-Wait ~15 seconds for the batch processor to flush, then query Tempo:
+Wait ~15 seconds for the batch processor to flush, then query Tempo through the gateway (which enforces HTTPS and bearer auth):
 
 ```sh
-# Terminal 1 — port-forward Tempo instead
-oc port-forward -n $NS svc/tempo-tempo 3200:3200
+# Terminal 1 — port-forward the gateway query port
+oc port-forward -n $NS svc/tempo-tempo-gateway 8080:8080
 
-# Terminal 2 — retrieve the trace by ID
-curl -s "http://localhost:3200/api/traces/$TRACE_ID" \
+# Terminal 2 — retrieve the trace by ID (requires your OpenShift token)
+TOKEN=$(oc whoami -t)
+curl -sk "https://localhost:8080/api/traces/v1/$TENANT/tempo/api/traces/$TRACE_ID" \
+  -H "Authorization: Bearer $TOKEN" \
   | python3 -m json.tool | grep -E '"name"|service.name'
 # Expected:
 # "service.name"
@@ -446,8 +520,10 @@ oc logs -n $NS deployment/otel-collector --tail=20 | grep -E "Traces|Logs|spans|
 After traces arrive, Tempo indexes their attributes. Confirm `service.name` and Kubernetes labels are present:
 
 ```sh
-# with port-forward to Tempo on 3200 still active
-curl -s http://localhost:3200/api/search/tags | python3 -m json.tool
+# with port-forward to tempo-tempo-gateway on 8080 still active
+TOKEN=$(oc whoami -t)
+curl -sk "https://localhost:8080/api/traces/v1/$TENANT/tempo/api/search/tags" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 # Expected tagNames to include: service.name, k8s.namespace.name, k8s.pod.name
 ```
 
