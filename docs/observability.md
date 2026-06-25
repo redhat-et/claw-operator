@@ -598,6 +598,142 @@ Gateway pod                OTel Collector (deployment)      Tempo
 
 The operator's responsibility is limited to configuring the gateway pod — setting `OTEL_*` environment variables and `diagnostics.otel.*` in `operator.json`. The collector and trace storage are platform infrastructure deployed independently.
 
+## Optional: Log Storage with LokiStack
+
+Log forwarding is functional as-is — the collector receives OTLP logs from the gateway and the `debug` exporter confirms receipt. Persistent log storage with a queryable UI requires additional infrastructure and is **optional**.
+
+### When to add it
+
+- Your cluster already has the **Loki Operator** and **Red Hat OpenShift Logging Operator** installed
+- You need logs searchable in **Observe → Logs** in the OpenShift Console
+- You are running on a cluster with sufficient capacity (LokiStack `1x.extra-small` needs ~4–5 vCPU and ~8 GiB beyond the base workload)
+
+### Prerequisites
+
+OpenShift Logging 6.5+ (OTLP ingestion is GA). Install both operators:
+
+```sh
+cat <<EOF | oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: loki-operator
+  namespace: openshift-operators-redhat
+spec:
+  channel: stable-6.5
+  name: loki-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cluster-logging
+  namespace: openshift-operators-redhat
+spec:
+  channel: stable-6.5
+  name: cluster-logging
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
+EOF
+```
+
+### Deploy LokiStack
+
+LokiStack requires S3-compatible object storage. Provide credentials as a Secret:
+
+```sh
+# Create the secret (replace with your actual S3 credentials)
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lokistack-s3
+  namespace: $NS
+stringData:
+  access_key_id: <YOUR_ACCESS_KEY>
+  access_key_secret: <YOUR_SECRET_KEY>
+  bucketnames: <YOUR_BUCKET>
+  endpoint: <S3_ENDPOINT>   # omit for AWS S3 native
+  region: us-east-1
+EOF
+
+cat <<EOF | oc apply -f -
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: logging-loki
+  namespace: $NS
+spec:
+  size: 1x.extra-small
+  storage:
+    schemas:
+    - version: v13
+      effectiveDate: "2024-01-01"
+    secret:
+      name: lokistack-s3
+      type: s3
+  tenants:
+    mode: openshift-logging
+  limits:
+    global:
+      otlp:
+        streamLabels:
+          resourceAttributes:
+          - name: "k8s.namespace.name"
+          - name: "k8s.pod.name"
+          - name: "k8s.container.name"
+          - name: "service.name"
+EOF
+```
+
+### Point the collector at LokiStack
+
+Once LokiStack is ready, add the Loki OTLP exporter to the collector's logs pipeline. This is the only change needed — the collector CR is updated in place:
+
+```yaml
+# Add to spec.config.exporters:
+exporters:
+  otlphttp/loki:
+    endpoint: https://logging-loki-gateway.$NS.svc:8080/otlp
+    tls:
+      ca_file: /etc/openshift-ca/service-ca.crt
+    auth:
+      authenticator: bearertokenauth
+    headers:
+      X-Scope-OrgID: "application"
+
+# Update the logs pipeline in spec.config.service.pipelines:
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki, debug]
+```
+
+### Enable the Logging UI Plugin
+
+```sh
+cat <<EOF | oc apply -f -
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: logging
+spec:
+  type: Logging
+  logging:
+    lokiStack:
+      name: logging-loki
+      namespace: $NS
+    schema: otel
+EOF
+```
+
+Logs then appear at **Observe → Logs** in the OpenShift Console. Use LogQL or the attribute filters to query by `service.name`, `k8s.namespace.name`, or any resource attribute the gateway emits.
+
 ## Troubleshooting
 
 **Traces not appearing in Tempo**
@@ -634,6 +770,6 @@ If the endpoint is in a different namespace, ensure the `to` selector covers it 
 
 The operator classifies `*.svc` and `*.svc.cluster.local` hostnames as in-cluster and adds a pod/namespace selector rule. Bare IP addresses or external FQDNs get a port-only rule. If using an IP address for the collector, confirm the egress NetworkPolicy has the port open.
 
-**Logs not forwarded**
+**Logs visible in collector but not in OpenShift Console**
 
-The default logs pipeline in the example collector config uses only the `debug` exporter. To forward logs to a backend (e.g., Loki), add an `otlp_http` or `loki` exporter to the collector config and include it in the `logs` pipeline.
+The default collector logs pipeline uses only the `debug` exporter — log receipt is confirmed via `oc logs deployment/otel-collector`, but logs are not stored for UI querying. See [Optional: Log Storage with LokiStack](#optional-log-storage-with-lokistack) for the additional setup required. LokiStack is a separate infrastructure component that requires object storage and additional node capacity.
