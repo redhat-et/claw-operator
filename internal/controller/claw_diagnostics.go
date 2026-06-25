@@ -137,6 +137,33 @@ func injectDiagnosticsConfig(config map[string]any, instance *clawv1alpha1.Claw)
 			otel["endpoint"] = ep
 		}
 	}
+
+	// Explicitly allow the diagnostics plugins so they are fully trusted and
+	// produce complete instrumentation data. Without plugins.allow, OpenClaw
+	// treats non-bundled plugins as auto-discovered (limited trust mode) and
+	// their spans may be sparse or suppressed.
+	pluginIDs := requiredDiagnosticsPlugins(instance)
+	if len(pluginIDs) > 0 {
+		plugins, _ := config["plugins"].(map[string]any)
+		if plugins == nil {
+			plugins = map[string]any{}
+			config["plugins"] = plugins
+		}
+		existing, _ := plugins["allow"].([]any)
+		seen := make(map[string]bool)
+		for _, v := range existing {
+			if s, ok := v.(string); ok {
+				seen[s] = true
+			}
+		}
+		for _, id := range pluginIDs {
+			if !seen[id] {
+				existing = append(existing, id)
+				seen[id] = true
+			}
+		}
+		plugins["allow"] = existing
+	}
 }
 
 // injectOTelEnvVars injects OTel resource attribute environment variables
