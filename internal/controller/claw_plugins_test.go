@@ -713,6 +713,7 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/diagnostics-otel"}
+		instance.Spec.Traces = &clawv1alpha1.TracesSpec{Enabled: true, Endpoint: "http://otel-collector.default.svc:4318"}
 		smDisabled := false
 		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{
 			Enabled:        true,

@@ -827,7 +827,6 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 		return fmt.Errorf("failed to inject web search config: %w", err)
 	}
 
-	injectMetricsConfig(config, instance)
 	injectDiagnosticsConfig(config, instance)
 	injectSkipBootstrap(config, instance)
 	if !userManagedConfig(instance) {
@@ -857,7 +856,9 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 		}
 	}
 	if err := injectObservabilityResources(objects, instance); err != nil {
-		return err
+		setCondition(instance, clawv1alpha1.ConditionTypeReady,
+			metav1.ConditionFalse, clawv1alpha1.ConditionReasonConfigFailed, err.Error())
+		return fmt.Errorf("failed to configure observability: %w", err)
 	}
 	if err := injectKubePortsIntoNetworkPolicy(objects, resolvedCreds, instance.Name); err != nil {
 		return fmt.Errorf("failed to inject Kubernetes ports into NetworkPolicy: %w", err)

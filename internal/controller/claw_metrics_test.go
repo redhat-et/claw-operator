@@ -422,6 +422,7 @@ func TestMetricsIntegration(t *testing.T) {
 		instance.Name = testInstanceName
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
+		instance.Spec.Traces = &clawv1alpha1.TracesSpec{Enabled: true, Endpoint: "http://otel-collector.default.svc:4318"}
 		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{Enabled: true}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
@@ -525,6 +526,7 @@ func TestMetricsIntegration(t *testing.T) {
 		instance.Name = testInstanceName
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
+		instance.Spec.Traces = &clawv1alpha1.TracesSpec{Enabled: true, Endpoint: "http://otel-collector.default.svc:4318"}
 		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{Enabled: true}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
@@ -543,6 +545,7 @@ func TestMetricsIntegration(t *testing.T) {
 		instance.Name = testInstanceName
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
+		instance.Spec.Traces = &clawv1alpha1.TracesSpec{Enabled: true, Endpoint: "http://otel-collector.default.svc:4318"}
 		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{Enabled: true, Port: &customPort}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
@@ -638,6 +641,7 @@ func TestMetricsIntegration(t *testing.T) {
 		instance.Name = testInstanceName
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
+		instance.Spec.Traces = &clawv1alpha1.TracesSpec{Enabled: true, Endpoint: "http://otel-collector.default.svc:4318"}
 		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{Enabled: true}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 

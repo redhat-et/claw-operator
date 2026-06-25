@@ -53,6 +53,19 @@ func tracesSamplingRatio(instance *clawv1alpha1.Claw) string {
 	return "1"
 }
 
+// otlpEndpoint returns the best available OTLP endpoint for the gateway SDK.
+// Prefers spec.traces.endpoint; falls back to an explicit spec.logs.endpoint
+// when traces is not configured. Metrics share whatever endpoint is available.
+func otlpEndpoint(instance *clawv1alpha1.Claw) string {
+	if ep := tracesEndpoint(instance); ep != "" {
+		return ep
+	}
+	if instance.Spec.Logs != nil && instance.Spec.Logs.Endpoint != "" {
+		return instance.Spec.Logs.Endpoint
+	}
+	return ""
+}
+
 // injectObservabilityResources handles metrics Service/NP and telemetry egress rules.
 // The OTel Collector is expected to be deployed externally (e.g., via the OTel Operator);
 // the gateway sends OTLP directly to it via OTEL_EXPORTER_OTLP_ENDPOINT.
@@ -65,6 +78,9 @@ func injectObservabilityResources(
 	}
 	if logsEnabled(instance) && logsEndpoint(instance) == "" {
 		return fmt.Errorf("spec.logs requires either spec.logs.endpoint or spec.traces.endpoint when enabled")
+	}
+	if metricsEnabled(instance) && otlpEndpoint(instance) == "" {
+		return fmt.Errorf("spec.traces.endpoint or spec.logs.endpoint is required when spec.metrics.enabled is true")
 	}
 	if metricsEnabled(instance) {
 		if err := addMetricsPortToService(objects, instance); err != nil {
@@ -82,13 +98,14 @@ func injectObservabilityResources(
 	return nil
 }
 
-// injectDiagnosticsConfig injects diagnostics.otel config keys when traces or
-// logs are enabled. The endpoint is set to spec.traces.endpoint — the gateway
-// sends OTLP directly to an externally-deployed OTel Collector.
+// injectDiagnosticsConfig injects diagnostics.otel config keys when traces,
+// logs, or metrics are enabled. The endpoint is resolved via otlpEndpoint —
+// the gateway sends OTLP directly to an externally-deployed OTel Collector.
 func injectDiagnosticsConfig(config map[string]any, instance *clawv1alpha1.Claw) {
 	tracesOn := tracesEnabled(instance)
 	logsOn := logsEnabled(instance)
-	if !tracesOn && !logsOn {
+	metricsOn := metricsEnabled(instance)
+	if !tracesOn && !logsOn && !metricsOn {
 		return
 	}
 
@@ -110,8 +127,13 @@ func injectDiagnosticsConfig(config map[string]any, instance *clawv1alpha1.Claw)
 	if logsOn {
 		otel["logs"] = true
 	}
+	if metricsOn {
+		otel["metrics"] = true
+	}
+	// Set the collector endpoint from the best available signal endpoint.
+	// otlpEndpoint prefers traces, then falls back to an explicit logs endpoint.
 	if _, set := otel["endpoint"]; !set {
-		if ep := tracesEndpoint(instance); ep != "" {
+		if ep := otlpEndpoint(instance); ep != "" {
 			otel["endpoint"] = ep
 		}
 	}
@@ -158,8 +180,9 @@ func injectOTelEnvVars(
 				"service.instance.id=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE)",
 			)
 
-			// Point the SDK at the external OTel Collector directly.
-			if ep := tracesEndpoint(instance); ep != "" {
+			// Point the SDK at the external OTel Collector.
+			// Uses the best available endpoint across all enabled signals.
+			if ep := otlpEndpoint(instance); ep != "" {
 				envVars = setOrAppendEnv(envVars, "OTEL_EXPORTER_OTLP_ENDPOINT", ep)
 			}
 

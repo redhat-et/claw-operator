@@ -90,6 +90,24 @@ func TestTracesAndLogsHelpers(t *testing.T) {
 		assert.Equal(t, "0.1", tracesSamplingRatio(instance))
 	})
 
+	t.Run("otlpEndpoint prefers traces", func(t *testing.T) {
+		instance := testClawWithTraces("http://traces.svc:4318", "")
+		instance.Spec.Logs = &clawv1alpha1.LogsSpec{Enabled: true, Endpoint: "http://logs.svc:4318"}
+		assert.Equal(t, "http://traces.svc:4318", otlpEndpoint(instance))
+	})
+
+	t.Run("otlpEndpoint falls back to explicit logs endpoint when no traces", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Logs = &clawv1alpha1.LogsSpec{Enabled: true, Endpoint: "http://loki.svc:4318"}
+		assert.Equal(t, "http://loki.svc:4318", otlpEndpoint(instance))
+	})
+
+	t.Run("otlpEndpoint empty when no signal has endpoint", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{}
+		assert.Equal(t, "", otlpEndpoint(instance))
+	})
+
 }
 
 func TestInjectDiagnosticsConfig(t *testing.T) {
@@ -155,6 +173,34 @@ func TestInjectDiagnosticsConfig(t *testing.T) {
 
 		_, hasDiag := config["diagnostics"]
 		assert.False(t, hasDiag)
+	})
+
+	t.Run("logs-only with own endpoint sets endpoint from logs", func(t *testing.T) {
+		config := map[string]any{}
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Logs = &clawv1alpha1.LogsSpec{Enabled: true, Endpoint: "http://loki.svc:4318"}
+
+		injectDiagnosticsConfig(config, instance)
+
+		otel := config["diagnostics"].(map[string]any)["otel"].(map[string]any)
+		assert.Equal(t, true, otel["logs"])
+		assert.Equal(t, "http://loki.svc:4318", otel["endpoint"])
+		_, hasTraces := otel["traces"]
+		assert.False(t, hasTraces)
+	})
+
+	t.Run("metrics-only with traces endpoint sets all three signals", func(t *testing.T) {
+		config := map[string]any{}
+		instance := testClawWithTraces("http://collector.svc:4318", "")
+		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{Enabled: true}
+
+		injectDiagnosticsConfig(config, instance)
+
+		otel := config["diagnostics"].(map[string]any)["otel"].(map[string]any)
+		assert.Equal(t, true, otel["traces"])
+		assert.Equal(t, true, otel["metrics"])
+		assert.Equal(t, "http://collector.svc:4318", otel["endpoint"])
 	})
 }
 
@@ -234,6 +280,29 @@ func TestInjectOTelEnvVars(t *testing.T) {
 			env := e.(map[string]any)
 			assert.NotEqual(t, "OTEL_TRACES_SAMPLER", env["name"])
 		}
+	})
+
+	t.Run("sets OTEL_EXPORTER_OTLP_ENDPOINT from logs endpoint when no traces", func(t *testing.T) {
+		objects := makeTestDeploymentForDiagnostics()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Logs = &clawv1alpha1.LogsSpec{Enabled: true, Endpoint: "http://loki.svc:4318"}
+
+		require.NoError(t, injectOTelEnvVars(objects, instance))
+
+		containers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "containers",
+		)
+		gateway := containers[0].(map[string]any)
+		envVars := gateway["env"].([]any)
+		envMap := make(map[string]string)
+		for _, e := range envVars {
+			env := e.(map[string]any)
+			if v, ok := env["value"].(string); ok {
+				envMap[env["name"].(string)] = v
+			}
+		}
+		assert.Equal(t, "http://loki.svc:4318", envMap["OTEL_EXPORTER_OTLP_ENDPOINT"])
 	})
 
 	t.Run("returns error when deployment not found", func(t *testing.T) {
