@@ -123,6 +123,9 @@ func injectDiagnosticsConfig(config map[string]any, instance *clawv1alpha1.Claw)
 		diagnostics["otel"] = otel
 	}
 
+	// enabled activates the diagnostics-otel plugin's OTLP exporter.
+	// Without this key the plugin loads but does not initialize any exporters.
+	otel["enabled"] = true
 	if tracesOn {
 		otel["traces"] = true
 	}
