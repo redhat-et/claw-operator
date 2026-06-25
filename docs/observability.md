@@ -133,8 +133,6 @@ spec:
   storage:
     traces:
       backend: memory   # use s3/gcs/azure for production
-  jaegerui:
-    enabled: true
   resources:
     total:
       limits:
@@ -453,16 +451,60 @@ curl -s http://localhost:3200/api/search/tags | python3 -m json.tool
 # Expected tagNames to include: service.name, k8s.namespace.name, k8s.pod.name
 ```
 
-## Accessing the Tempo UI
+## Accessing the Traces UI
 
-TempoMonolithic ships with a Jaeger-compatible query UI. Expose it via a Route:
+The recommended way to view traces on OpenShift is through the OpenShift Console's built-in **Observe → Traces** view, powered by the Cluster Observability Operator (COO). The deprecated Jaeger UI bundled in TempoMonolithic is not used.
+
+### Install the Cluster Observability Operator
 
 ```sh
-oc expose svc/tempo-tempo-jaegerui -n $NS --port=16686
-oc get route tempo-tempo-jaegerui -n $NS
+cat <<EOF | oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cluster-observability-operator
+  namespace: openshift-operators
+spec:
+  channel: stable
+  name: cluster-observability-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
+EOF
 ```
 
-Navigate to the route URL and search by `Service Name: openclaw` to see traces from the gateway.
+Wait for it to reach `Succeeded`:
+
+```sh
+oc get csv -n openshift-operators | grep cluster-observability
+```
+
+### Enable the distributed tracing UI plugin
+
+```sh
+cat <<EOF | oc apply -f -
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: distributed-tracing
+spec:
+  type: DistributedTracing
+EOF
+```
+
+### View traces
+
+In the OpenShift Console, go to **Observe → Traces**. Select your Tempo instance (`tempo` in the namespace where you deployed it) and search by attribute:
+
+- `service.name = openclaw` — gateway spans
+- `k8s.namespace.name = <your-namespace>` — all spans from a specific namespace
+
+Use the **TraceQL** query editor for advanced filtering, e.g.:
+```
+{ resource.service.name = "openclaw" && duration > 500ms }
+```
+
+The scatter plot shows trace start time vs. duration; click any trace to open the Gantt chart view with per-span attribute detail.
 
 ## Architecture
 
