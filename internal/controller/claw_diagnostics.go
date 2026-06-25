@@ -18,6 +18,8 @@ package controller
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -211,6 +213,15 @@ func injectOTelEnvVars(
 			// Uses the best available endpoint across all enabled signals.
 			if ep := otlpEndpoint(instance); ep != "" {
 				envVars = setOrAppendEnv(envVars, "OTEL_EXPORTER_OTLP_ENDPOINT", ep)
+
+				// The gateway runs behind a MITM proxy (HTTP_PROXY). OTLP traffic to
+				// the collector must bypass it or the proxy will return 403 (no
+				// credential rule for the collector host). Append the collector hostname
+				// to NO_PROXY / no_proxy so the OTel SDK connects directly.
+				if u, err := url.Parse(ep); err == nil && u.Hostname() != "" {
+					envVars = appendToNoProxy(envVars, "NO_PROXY", u.Hostname())
+					envVars = appendToNoProxy(envVars, "no_proxy", u.Hostname())
+				}
 			}
 
 			if tracesEnabled(instance) {
@@ -231,6 +242,38 @@ func injectOTelEnvVars(
 		return fmt.Errorf("gateway container not found in claw deployment")
 	}
 	return fmt.Errorf("claw deployment not found in manifests")
+}
+
+// appendToNoProxy finds the NO_PROXY or no_proxy env var and appends the given
+// hostname if it is not already present. The MITM proxy respects this variable
+// via NODE_USE_ENV_PROXY, so appending the OTel Collector hostname causes the
+// Node.js SDK to connect to the collector directly rather than through the proxy.
+func appendToNoProxy(envVars []any, name, hostname string) []any {
+	for i, e := range envVars {
+		env, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		if env["name"] != name {
+			continue
+		}
+		existing, _ := env["value"].(string)
+		// Check if already present (exact hostname or as part of a CSV entry).
+		for _, h := range strings.Split(existing, ",") {
+			if strings.TrimSpace(h) == hostname {
+				return envVars
+			}
+		}
+		if existing != "" {
+			env["value"] = existing + "," + hostname
+		} else {
+			env["value"] = hostname
+		}
+		envVars[i] = env
+		return envVars
+	}
+	// NO_PROXY not yet set — create a new entry.
+	return append(envVars, map[string]any{"name": name, "value": hostname})
 }
 
 func setOrAppendEnvDownwardAPI(envVars []any, name, fieldPath string) []any {

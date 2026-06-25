@@ -799,6 +799,19 @@ Logs then appear at **Observe → Logs** in the OpenShift Console. Use LogQL or 
 
 ## Troubleshooting
 
+**Gateway receives 403 when sending OTLP to the collector**
+
+The gateway runs behind a MITM proxy (`HTTP_PROXY=http://claw-proxy:8080`) that intercepts all outbound HTTP. If the OTel Collector endpoint is not in `NO_PROXY`, the proxy returns `403 Forbidden` because it has no credential rule for that host.
+
+The operator automatically adds the collector hostname to `NO_PROXY` and `no_proxy` from v... (this version) onward. If you are on an older operator version or the 403 persists, verify the env var on the running gateway pod:
+
+```sh
+oc exec -n $NS <gateway-pod> -- sh -c "cat /proc/1/environ | tr '\0' '\n' | grep -i proxy"
+# NO_PROXY should include the OTel Collector hostname
+```
+
+If missing, update to the latest operator image — the fix injects the OTLP endpoint hostname into `NO_PROXY` at reconcile time.
+
 **Traces not appearing in Tempo**
 
 Check the batch timeout — the collector batches for up to 10 seconds before flushing. After sending a test trace, wait 15 seconds before querying.
