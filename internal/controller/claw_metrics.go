@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -34,10 +33,8 @@ import (
 )
 
 const (
-	DefaultOTelCollectorImage  = "mirror.gcr.io/otel/opentelemetry-collector:0.152.1"
-	DefaultMetricsPort         = int32(9464)
-	OTelCollectorContainerName = "otel-collector"
-	ServiceMonitorKind         = "ServiceMonitor"
+	DefaultMetricsPort = int32(9464)
+	ServiceMonitorKind = "ServiceMonitor"
 )
 
 func getServiceMonitorName(instanceName string) string {
@@ -73,114 +70,10 @@ func serviceMonitorInterval(instance *clawv1alpha1.Claw) string {
 	return "30s"
 }
 
-// configureMetricsSidecar adds the OTel Collector sidecar container to the gateway
-// Deployment when metrics are enabled.
-func configureMetricsSidecar(
-	objects []*unstructured.Unstructured,
-	instance *clawv1alpha1.Claw,
-	otelImage string,
-) error {
-	if otelImage == "" {
-		otelImage = DefaultOTelCollectorImage
-	}
-
-	port := metricsPort(instance)
-	gatewayName := getClawDeploymentName(instance.Name)
-
-	for _, obj := range objects {
-		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
-			continue
-		}
-
-		containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
-		if err != nil {
-			return fmt.Errorf("failed to get containers from claw deployment: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("containers field not found in claw deployment")
-		}
-
-		sidecar := map[string]any{
-			"name":  OTelCollectorContainerName,
-			"image": otelImage,
-			"args":  []any{"--config=/etc/otel-collector/config.yaml"},
-			"ports": []any{
-				map[string]any{
-					"name":          "metrics",
-					"containerPort": int64(port),
-					"protocol":      "TCP",
-				},
-			},
-			"resources": map[string]any{
-				"requests": map[string]any{"memory": "32Mi", "cpu": "10m"},
-				"limits":   map[string]any{"memory": "128Mi", "cpu": "100m"},
-			},
-			"securityContext": map[string]any{
-				"allowPrivilegeEscalation": false,
-				"readOnlyRootFilesystem":   true,
-				"runAsNonRoot":             true,
-				"capabilities":             map[string]any{"drop": []any{"ALL"}},
-			},
-			"volumeMounts": []any{
-				map[string]any{
-					"name":      "config",
-					"mountPath": "/etc/otel-collector/config.yaml",
-					"subPath":   "otel-collector.yaml",
-					"readOnly":  true,
-				},
-			},
-		}
-
-		containers = append(containers, sidecar)
-		if err := unstructured.SetNestedSlice(
-			obj.Object, containers, "spec", "template", "spec", "containers",
-		); err != nil {
-			return fmt.Errorf("failed to set containers on claw deployment: %w", err)
-		}
-		return nil
-	}
-	return fmt.Errorf("claw deployment not found in manifests")
-}
-
-// injectOTelCollectorConfig adds the otel-collector.yaml key to the gateway ConfigMap.
-func injectOTelCollectorConfig(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
-	port := metricsPort(instance)
-	configMapName := getConfigMapName(instance.Name)
-
-	collectorConfig := `receivers:
-  otlp:
-    protocols:
-      http:
-        endpoint: 127.0.0.1:4318
-exporters:
-  prometheus:
-    endpoint: 0.0.0.0:` + strconv.Itoa(int(port)) + `
-service:
-  pipelines:
-    metrics:
-      receivers: [otlp]
-      exporters: [prometheus]
-`
-
-	for _, obj := range objects {
-		if obj.GetKind() != ConfigMapKind || obj.GetName() != configMapName {
-			continue
-		}
-		if err := unstructured.SetNestedField(
-			obj.Object, collectorConfig, "data", "otel-collector.yaml",
-		); err != nil {
-			return fmt.Errorf("failed to set otel-collector.yaml in ConfigMap: %w", err)
-		}
-		return nil
-	}
-	return fmt.Errorf("ConfigMap %q not found in manifests", configMapName)
-}
-
-// injectMetricsConfig injects diagnostics.otel config for the OTel Collector
-// sidecar. When the user hasn't set diagnostics.otel, it injects the base
-// endpoint. When the user has their own diagnostics.otel (e.g., for tracing
-// to Langfuse), it deep-merges only the sidecar-specific keys (metrics +
-// metricsEndpoint) so both paths work simultaneously.
+// injectMetricsConfig injects diagnostics.otel.metrics=true when metrics are
+// enabled. The endpoint is not set here; injectDiagnosticsConfig owns it
+// (pointing at the external OTel Collector). This function only enables the
+// metrics signal so OpenClaw knows to send OTLP metrics.
 func injectMetricsConfig(config map[string]any, instance *clawv1alpha1.Claw) {
 	if !metricsEnabled(instance) {
 		return
@@ -194,18 +87,12 @@ func injectMetricsConfig(config map[string]any, instance *clawv1alpha1.Claw) {
 
 	otel, _ := diagnostics["otel"].(map[string]any)
 	if otel == nil {
-		diagnostics["otel"] = map[string]any{
-			"metrics":  true,
-			"endpoint": "http://localhost:4318",
-		}
-		return
+		otel = map[string]any{}
+		diagnostics["otel"] = otel
 	}
 
 	if _, set := otel["metrics"]; !set {
 		otel["metrics"] = true
-	}
-	if _, set := otel["metricsEndpoint"]; !set {
-		otel["metricsEndpoint"] = "http://localhost:4318"
 	}
 }
 

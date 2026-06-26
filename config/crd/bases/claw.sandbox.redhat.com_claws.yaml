@@ -502,6 +502,20 @@ spec:
                   Idle, when set to true, instructs the operator to scale all managed
                   Deployments to zero replicas. Set to false (or omit) to run normally.
                 type: boolean
+              logs:
+                description: |-
+                  Logs configures log forwarding via OTLP. The gateway sends logs directly
+                  to spec.logs.endpoint, or spec.traces.endpoint when not specified.
+                properties:
+                  enabled:
+                    description: Enabled activates log forwarding.
+                    type: boolean
+                  endpoint:
+                    description: |-
+                      Endpoint is the OTLP HTTP endpoint to forward logs to.
+                      Defaults to the traces endpoint when not specified.
+                    type: string
+                type: object
               mcpServers:
                 additionalProperties:
                   description: McpServerSpec defines an MCP server the operator injects
@@ -601,17 +615,19 @@ spec:
                   Map keys are server names as they appear in the mcp.servers config.
                 type: object
               metrics:
-                description: Metrics configures Prometheus metrics collection via
-                  an OTel Collector sidecar.
+                description: |-
+                  Metrics configures Prometheus metrics for the gateway. The gateway sends
+                  OTLP metrics to spec.traces.endpoint; a ServiceMonitor is created for
+                  Prometheus scraping when enabled.
                 properties:
                   enabled:
                     description: |-
-                      Enabled activates the OTel Collector sidecar and diagnostics.otel.metrics
-                      config injection.
+                      Enabled activates diagnostics.otel.metrics config injection. The gateway
+                      sends OTLP metrics to spec.traces.endpoint (shared with traces/logs).
                     type: boolean
                   port:
                     description: |-
-                      Port for the Prometheus metrics endpoint on the OTel Collector sidecar.
+                      Port for the Prometheus metrics endpoint exposed by the external OTel Collector.
                       Default: 9464.
                     format: int32
                     maximum: 65535
@@ -993,6 +1009,27 @@ spec:
                     x-kubernetes-list-map-keys:
                     - name
                     x-kubernetes-list-type: map
+                type: object
+              traces:
+                description: |-
+                  Traces configures distributed tracing via OTLP. The gateway sends spans
+                  directly to the specified external OTel Collector endpoint.
+                properties:
+                  enabled:
+                    description: Enabled activates trace collection and forwarding.
+                    type: boolean
+                  endpoint:
+                    description: |-
+                      Endpoint is the OTLP HTTP endpoint to forward traces to
+                      (e.g., "http://otel-collector.observability.svc:4318").
+                    type: string
+                  samplingRatio:
+                    description: |-
+                      SamplingRatio controls the trace sampling rate as a string
+                      between "0" and "1" (e.g., "0.1" for 10% sampling).
+                      Default: "1" (sample all traces).
+                    pattern: ^(0(\.\d+)?|1(\.0+)?)$
+                    type: string
                 type: object
               version:
                 description: |-

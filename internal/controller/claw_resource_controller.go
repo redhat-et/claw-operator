@@ -393,11 +393,10 @@ type ClawResourceReconciler struct {
 	// UserSecretReader reads user-owned Secrets directly from the API server,
 	// bypassing the informer cache (where Transform has stripped .Data).
 	// Operator-owned Secrets keep full .Data in cache and use r.Get().
-	UserSecretReader   client.Reader
-	ProxyImage         string
-	KubectlImage       string
-	OTelCollectorImage string
-	ImagePullPolicy    string
+	UserSecretReader client.Reader
+	ProxyImage       string
+	KubectlImage     string
+	ImagePullPolicy  string
 	// MetricsRefreshed is closed by Start() after the initial metrics refresh.
 	// Reconcile() waits on it so no reconciliation runs before metrics are populated.
 	MetricsRefreshed chan struct{}
@@ -828,7 +827,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 		return fmt.Errorf("failed to inject web search config: %w", err)
 	}
 
-	injectMetricsConfig(config, instance)
+	injectDiagnosticsConfig(config, instance)
 	injectSkipBootstrap(config, instance)
 	if !userManagedConfig(instance) {
 		injectBootstrapHook(config)
@@ -856,16 +855,10 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 			return fmt.Errorf("failed to inject Kubernetes skill: %w", err)
 		}
 	}
-	if metricsEnabled(instance) {
-		if err := injectOTelCollectorConfig(objects, instance); err != nil {
-			return fmt.Errorf("failed to inject OTel collector config: %w", err)
-		}
-		if err := addMetricsPortToService(objects, instance); err != nil {
-			return fmt.Errorf("failed to add metrics port to Service: %w", err)
-		}
-		if err := addMetricsIngressRule(objects, instance); err != nil {
-			return fmt.Errorf("failed to add metrics ingress rule: %w", err)
-		}
+	if err := injectObservabilityResources(objects, instance); err != nil {
+		setCondition(instance, clawv1alpha1.ConditionTypeReady,
+			metav1.ConditionFalse, clawv1alpha1.ConditionReasonConfigFailed, err.Error())
+		return fmt.Errorf("failed to configure observability: %w", err)
 	}
 	if err := injectKubePortsIntoNetworkPolicy(objects, resolvedCreds, instance.Name); err != nil {
 		return fmt.Errorf("failed to inject Kubernetes ports into NetworkPolicy: %w", err)
@@ -940,9 +933,9 @@ func (r *ClawResourceReconciler) configureDeployments(
 	if err := configureClawDeploymentForAuth(objects, instance); err != nil {
 		return fmt.Errorf("failed to configure gateway for auth: %w", err)
 	}
-	if metricsEnabled(instance) {
-		if err := configureMetricsSidecar(objects, instance, r.OTelCollectorImage); err != nil {
-			return fmt.Errorf("failed to configure metrics sidecar: %w", err)
+	if tracesEnabled(instance) || logsEnabled(instance) || metricsEnabled(instance) {
+		if err := injectOTelEnvVars(objects, instance); err != nil {
+			return fmt.Errorf("failed to inject OTel env vars: %w", err)
 		}
 	}
 	if warning := checkPluginCompatibility(instance); warning != "" {

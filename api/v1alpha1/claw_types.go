@@ -522,13 +522,13 @@ type PersonaRef struct {
 	Name string `json:"name"`
 }
 
-// MetricsSpec configures Prometheus metrics collection via an OTel Collector sidecar.
+// MetricsSpec configures Prometheus metrics exposure for the gateway.
 type MetricsSpec struct {
-	// Enabled activates the OTel Collector sidecar and diagnostics.otel.metrics
-	// config injection.
+	// Enabled activates diagnostics.otel.metrics config injection. The gateway
+	// sends OTLP metrics to spec.traces.endpoint (shared with traces/logs).
 	Enabled bool `json:"enabled,omitempty"`
 
-	// Port for the Prometheus metrics endpoint on the OTel Collector sidecar.
+	// Port for the Prometheus metrics endpoint exposed by the external OTel Collector.
 	// Default: 9464.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
@@ -550,6 +550,37 @@ type ServiceMonitorSpec struct {
 	// Interval is the Prometheus scrape interval. Default: "30s".
 	// +optional
 	Interval string `json:"interval,omitempty"`
+}
+
+// TracesSpec configures distributed tracing via OTLP. The gateway sends spans
+// directly to the specified endpoint (e.g., an externally-deployed OTel Collector).
+type TracesSpec struct {
+	// Enabled activates trace collection and forwarding.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Endpoint is the OTLP HTTP endpoint to forward traces to
+	// (e.g., "http://otel-collector.observability.svc:4318").
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// SamplingRatio controls the trace sampling rate as a string
+	// between "0" and "1" (e.g., "0.1" for 10% sampling).
+	// Default: "1" (sample all traces).
+	// +optional
+	// +kubebuilder:validation:Pattern=`^(0(\.\d+)?|1(\.0+)?)$`
+	SamplingRatio string `json:"samplingRatio,omitempty"`
+}
+
+// LogsSpec configures log forwarding via OTLP. The gateway sends logs
+// directly to the specified endpoint (defaults to spec.traces.endpoint).
+type LogsSpec struct {
+	// Enabled activates log forwarding.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Endpoint is the OTLP HTTP endpoint to forward logs to.
+	// Defaults to the traces endpoint when not specified.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // NetworkSpec configures network behavior for the gateway pod.
@@ -738,9 +769,21 @@ type ClawSpec struct {
 	// +optional
 	WebFetch *WebFetchSpec `json:"webFetch,omitempty"`
 
-	// Metrics configures Prometheus metrics collection via an OTel Collector sidecar.
+	// Metrics configures Prometheus metrics for the gateway. The gateway sends
+	// OTLP metrics to spec.traces.endpoint; a ServiceMonitor is created for
+	// Prometheus scraping when enabled.
 	// +optional
 	Metrics *MetricsSpec `json:"metrics,omitempty"`
+
+	// Traces configures distributed tracing via OTLP. The gateway sends spans
+	// directly to the specified external OTel Collector endpoint.
+	// +optional
+	Traces *TracesSpec `json:"traces,omitempty"`
+
+	// Logs configures log forwarding via OTLP. The gateway sends logs directly
+	// to spec.logs.endpoint, or spec.traces.endpoint when not specified.
+	// +optional
+	Logs *LogsSpec `json:"logs,omitempty"`
 
 	// Network configures network behavior for the gateway pod.
 	// Controls in-cluster proxy bypass and additional egress rules.
