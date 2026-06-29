@@ -237,6 +237,43 @@ func TestClawIdling(t *testing.T) {
 		assert.Equal(t, clawv1alpha1.ConditionReasonIdle, readyCond.Reason)
 	})
 
+	t.Run("should update audit tracking annotations while idled", func(t *testing.T) {
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testInstanceName,
+				Namespace: namespace,
+			},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{
+						Name:     "gemini",
+						Provider: "google",
+						Type:     clawv1alpha1.CredentialTypeAPIKey,
+						SecretRef: []clawv1alpha1.SecretRefEntry{
+							{Name: aiModelSecret, Key: aiModelSecretKey},
+						},
+					},
+				},
+				Plugins: []string{"@openclaw/example"},
+				Idle:    true,
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconcileClaw(t, ctx, createClawReconciler(), testInstanceName, namespace)
+
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: testInstanceName, Namespace: namespace}, instance))
+		assert.Equal(t, `["gemini"]`, instance.Annotations[clawv1alpha1.AnnotationKeyTrackedCredentials])
+		assert.Equal(t, `["@openclaw/example"]`, instance.Annotations[clawv1alpha1.AnnotationKeyTrackedPlugins])
+	})
+
 	t.Run("should complete full status transition Ready→Idle→Ready", func(t *testing.T) {
 		t.Cleanup(func() {
 			deleteAndWaitAllResources(t, namespace)

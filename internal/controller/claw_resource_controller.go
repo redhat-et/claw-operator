@@ -1666,6 +1666,22 @@ func (r *ClawResourceReconciler) emitAuditTrackingEvents(ctx context.Context, in
 		return nil
 	}
 
+	// Patch both annotations in one write so the annotation update is atomic.
+	// Events are emitted only after this succeeds; otherwise a retry would see
+	// the old annotation snapshot and could announce the same delta again.
+	base := instance.DeepCopy()
+	patch := client.MergeFrom(base)
+	annotations := instance.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[clawv1alpha1.AnnotationKeyTrackedCredentials] = jsonEncodeNames(currentCreds)
+	annotations[clawv1alpha1.AnnotationKeyTrackedPlugins] = jsonEncodeNames(currentPlugins)
+	instance.SetAnnotations(annotations)
+	if err := r.Patch(ctx, instance, patch); err != nil {
+		return err
+	}
+
 	if credsChanged {
 		emitSetDiffEvents(r.Recorder, instance, logger,
 			trackedCreds, currentCreds,
@@ -1686,17 +1702,7 @@ func (r *ClawResourceReconciler) emitAuditTrackingEvents(ctx context.Context, in
 			corev1.EventTypeNormal, corev1.EventTypeWarning)
 	}
 
-	// Patch both annotations in one write so the annotation update is atomic.
-	base := instance.DeepCopy()
-	patch := client.MergeFrom(base)
-	annotations := instance.GetAnnotations()
-	if annotations == nil {
-		annotations = make(map[string]string)
-	}
-	annotations[clawv1alpha1.AnnotationKeyTrackedCredentials] = jsonEncodeNames(currentCreds)
-	annotations[clawv1alpha1.AnnotationKeyTrackedPlugins] = jsonEncodeNames(currentPlugins)
-	instance.SetAnnotations(annotations)
-	return r.Patch(ctx, instance, patch)
+	return nil
 }
 
 // annotationValue returns the value of a named annotation on obj, or "" if absent.
