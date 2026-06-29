@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -394,6 +396,7 @@ type ClawResourceReconciler struct {
 	// bypassing the informer cache (where Transform has stripped .Data).
 	// Operator-owned Secrets keep full .Data in cache and use r.Get().
 	UserSecretReader client.Reader
+	Recorder         record.EventRecorder
 	ProxyImage       string
 	KubectlImage     string
 	ImagePullPolicy  string
@@ -402,6 +405,7 @@ type ClawResourceReconciler struct {
 	MetricsRefreshed chan struct{}
 }
 
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=claw.sandbox.redhat.com,resources=claws,verbs=get;list;watch
@@ -447,6 +451,12 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if instance.Spec.Version == "" {
 		instance.Spec.Version = DefaultOpenClawVersion
+	}
+
+	// Audit event: warn when overwrite mode is active (destructive, wipes user config on restart)
+	if r.Recorder != nil && instance.Spec.Config != nil && instance.Spec.Config.MergeMode == clawv1alpha1.ConfigModeOverwrite {
+		r.Recorder.Event(instance, corev1.EventTypeWarning, "ConfigOverwriteMode",
+			"spec.config.mergeMode is set to overwrite — user config on the PVC will be replaced on every pod restart")
 	}
 
 	// Short-circuit when idled — scale deployments to zero and return
@@ -709,6 +719,13 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Update status based on deployment readiness
 	if err := r.updateStatus(ctx, instance); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status (will retry): %w", err)
+	}
+
+	// Emit audit events for credential/plugin additions/removals — called after updateStatus
+	// so the metadata patch response does not overwrite in-memory conditions before they are
+	// persisted to the status subresource.
+	if err := r.emitAuditTrackingEvents(ctx, instance); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update audit tracking annotations: %w", err)
 	}
 
 	return ctrl.Result{}, nil
@@ -1620,6 +1637,136 @@ func (r *ClawResourceReconciler) Start(ctx context.Context) error {
 		logger.Error(err, "failed to refresh Claw metrics on startup")
 	}
 	return nil
+}
+
+// emitAuditTrackingEvents diffs spec.credentials and effective plugins against the
+// JSON-encoded lists stored in their respective annotations, emits audit events for
+// additions and removals, then patches both annotations in a single write.
+//
+// Must be called after updateStatus: the metadata patch response from the API server
+// would overwrite in-memory status conditions if they had not yet been persisted.
+func (r *ClawResourceReconciler) emitAuditTrackingEvents(ctx context.Context, instance *clawv1alpha1.Claw) error {
+	logger := log.FromContext(ctx)
+
+	currentCreds := make([]string, 0, len(instance.Spec.Credentials))
+	for _, c := range instance.Spec.Credentials {
+		currentCreds = append(currentCreds, c.Name)
+	}
+	slices.Sort(currentCreds)
+
+	currentPlugins := effectivePlugins(instance)
+	slices.Sort(currentPlugins)
+
+	trackedCreds := jsonDecodeNames(annotationValue(instance, clawv1alpha1.AnnotationKeyTrackedCredentials))
+	trackedPlugins := jsonDecodeNames(annotationValue(instance, clawv1alpha1.AnnotationKeyTrackedPlugins))
+
+	credsChanged := !slices.Equal(currentCreds, trackedCreds)
+	pluginsChanged := !slices.Equal(currentPlugins, trackedPlugins)
+	if !credsChanged && !pluginsChanged {
+		return nil
+	}
+
+	if credsChanged {
+		emitSetDiffEvents(r.Recorder, instance, logger,
+			trackedCreds, currentCreds,
+			"credential added", "credential removed",
+			"CredentialAdded", "CredentialRemoved",
+			"Credential %q added to spec.credentials",
+			"Credential %q removed from spec.credentials",
+			corev1.EventTypeNormal, corev1.EventTypeWarning)
+	}
+
+	if pluginsChanged {
+		emitSetDiffEvents(r.Recorder, instance, logger,
+			trackedPlugins, currentPlugins,
+			"plugin configured", "plugin removed",
+			"PluginInstalled", "PluginRemoved",
+			"Plugin %q will be installed on next pod start",
+			"Plugin %q removed from active plugin list",
+			corev1.EventTypeNormal, corev1.EventTypeWarning)
+	}
+
+	// Patch both annotations in one write so the annotation update is atomic.
+	base := instance.DeepCopy()
+	patch := client.MergeFrom(base)
+	annotations := instance.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[clawv1alpha1.AnnotationKeyTrackedCredentials] = jsonEncodeNames(currentCreds)
+	annotations[clawv1alpha1.AnnotationKeyTrackedPlugins] = jsonEncodeNames(currentPlugins)
+	instance.SetAnnotations(annotations)
+	return r.Patch(ctx, instance, patch)
+}
+
+// annotationValue returns the value of a named annotation on obj, or "" if absent.
+func annotationValue(obj client.Object, key string) string {
+	if a := obj.GetAnnotations(); a != nil {
+		return a[key]
+	}
+	return ""
+}
+
+// jsonEncodeNames marshals a sorted name slice to a JSON string for use in annotations.
+// An empty slice is stored as "[]" rather than "" so it round-trips unambiguously.
+func jsonEncodeNames(names []string) string {
+	if names == nil {
+		names = []string{}
+	}
+	b, _ := json.Marshal(names)
+	return string(b)
+}
+
+// jsonDecodeNames parses a JSON-encoded name list from an annotation value.
+// An empty or unparseable value (e.g. a legacy CSV annotation) returns nil,
+// which the caller treats as "no previously tracked names" — a safe default
+// that triggers a one-time re-announcement of all current entries.
+func jsonDecodeNames(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(s), &names); err != nil {
+		return nil
+	}
+	return names
+}
+
+// emitSetDiffEvents fires audit events for items added to or removed from a tracked set.
+func emitSetDiffEvents(
+	rec record.EventRecorder,
+	obj client.Object,
+	logger logr.Logger,
+	prev, curr []string,
+	addLogMsg, removeLogMsg string,
+	addReason, removeReason string,
+	addFmt, removeFmt string,
+	addType, removeType string,
+) {
+	prevSet := make(map[string]struct{}, len(prev))
+	for _, n := range prev {
+		prevSet[n] = struct{}{}
+	}
+	currSet := make(map[string]struct{}, len(curr))
+	for _, n := range curr {
+		currSet[n] = struct{}{}
+	}
+	for _, n := range curr {
+		if _, existed := prevSet[n]; !existed {
+			if rec != nil {
+				rec.Eventf(obj, addType, addReason, addFmt, n)
+			}
+			logger.Info(addLogMsg, "name", obj.GetName(), "item", n)
+		}
+	}
+	for _, n := range prev {
+		if _, exists := currSet[n]; !exists {
+			if rec != nil {
+				rec.Eventf(obj, removeType, removeReason, removeFmt, n)
+			}
+			logger.Info(removeLogMsg, "name", obj.GetName(), "item", n)
+		}
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.

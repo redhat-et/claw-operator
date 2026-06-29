@@ -259,6 +259,7 @@ func main() {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		UserSecretReader: controller.NewLoggingUserSecretReader(mgr.GetAPIReader()),
+		Recorder:         mgr.GetEventRecorderFor("claw-operator"),
 		ProxyImage:       os.Getenv("PROXY_IMAGE"),
 		KubectlImage:     os.Getenv("KUBECTL_IMAGE"),
 		ImagePullPolicy:  imagePullPolicy,
@@ -282,6 +283,7 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		Config:    mgr.GetConfig(),
 		Clientset: pairingClientset,
+		Recorder:  mgr.GetEventRecorderFor("claw-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClawDevicePairingRequest")
 		os.Exit(1)

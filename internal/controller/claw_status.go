@@ -351,15 +351,19 @@ func (r *ClawResourceReconciler) updateStatus(ctx context.Context, instance *cla
 	if instance.Spec.Version != "" &&
 		instance.Status.LastDeployedVersion != "" &&
 		cmpOK && cmp < 0 {
+		msg := fmt.Sprintf(
+			"spec.version %s is older than previously deployed version %s; "+
+				"PVC data may be incompatible",
+			instance.Spec.Version, instance.Status.LastDeployedVersion)
 		setCondition(instance,
 			clawv1alpha1.ConditionTypeVersionDowngrade,
 			metav1.ConditionTrue,
 			clawv1alpha1.ConditionReasonVersionDowngrade,
-			fmt.Sprintf(
-				"spec.version %s is older than previously deployed version %s; "+
-					"PVC data may be incompatible",
-				instance.Spec.Version, instance.Status.LastDeployedVersion),
+			msg,
 		)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(instance, corev1.EventTypeWarning, "VersionDowngrade", "%s", msg)
+		}
 	} else {
 		meta.RemoveStatusCondition(&instance.Status.Conditions,
 			clawv1alpha1.ConditionTypeVersionDowngrade)

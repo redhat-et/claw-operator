@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/tools/remotecommand"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +57,7 @@ type ClawDevicePairingRequestReconciler struct {
 	Scheme    *runtime.Scheme
 	Config    *rest.Config
 	Clientset kubernetes.Interface
+	Recorder  record.EventRecorder
 	ExecFn    PodExecFunc
 }
 
@@ -186,6 +188,11 @@ func (r *ClawDevicePairingRequestReconciler) Reconcile(ctx context.Context, req 
 			"pod", pod.Name,
 			"requestID", instance.Spec.RequestID,
 			"output", stdout)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(instance, corev1.EventTypeNormal, "DevicePairingApproved",
+				"Device pairing request %q approved via pod %s (requestID: %s)",
+				instance.Name, pod.Name, instance.Spec.RequestID)
+		}
 		// Re-fetch to avoid conflict after the Processing status update
 		if fetchErr := r.Get(ctx, req.NamespacedName, instance); fetchErr != nil {
 			return ctrl.Result{}, fetchErr
