@@ -1,12 +1,12 @@
-# This NetworkPolicy allows ingress traffic to the controller-manager metrics endpoint.
-# Only OpenShift monitoring and explicitly labeled metrics-reader pods are able to gather metrics.
+# This NetworkPolicy allows ingress traffic to the controller-manager webhook endpoint.
+# Only OpenShift or Kubernetes API server pods are able to reach the webhook port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
     app.kubernetes.io/name: claw-operator
     app.kubernetes.io/managed-by: kustomize
-  name: allow-metrics-traffic
+  name: allow-webhook-traffic
   namespace: system
 spec:
   podSelector:
@@ -19,10 +19,13 @@ spec:
     - from:
       - namespaceSelector:
           matchLabels:
-            kubernetes.io/metadata.name: openshift-monitoring
-      - podSelector:
+            kubernetes.io/metadata.name: openshift-kube-apiserver
+      - namespaceSelector:
           matchLabels:
-            claw.sandbox.redhat.com/metrics-reader: "true"
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            component: kube-apiserver
       ports:
-        - port: 8443
+        - port: 9443
           protocol: TCP

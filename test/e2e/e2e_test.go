@@ -42,6 +42,8 @@ const (
 	serviceAccountName     = "claw-operator-controller-manager"
 	metricsServiceName     = "claw-operator-controller-manager-metrics-service"
 	metricsRoleBindingName = "claw-operator-metrics-binding"
+	metricsNetworkPolicy   = "claw-operator-allow-metrics-traffic"
+	webhookNetworkPolicy   = "claw-operator-allow-webhook-traffic"
 
 	defaultTimeout  = 2 * time.Minute
 	pollInterval    = 1 * time.Second
@@ -262,6 +264,17 @@ func TestManager(t *testing.T) { //nolint:gocyclo
 		"timeout waiting for controller-manager pod to be running")
 
 	t.Run("Manager", func(t *testing.T) {
+		t.Run("should create the manager NetworkPolicies after deploy", func(t *testing.T) {
+			t.Cleanup(func() { collectDebugInfo(t) })
+
+			for _, policyName := range []string{metricsNetworkPolicy, webhookNetworkPolicy} {
+				cmd := exec.Command("kubectl", "get", "networkpolicy", policyName,
+					"-n", operatorNamespace)
+				_, err := utils.Run(t, cmd)
+				require.NoError(t, err, "Manager NetworkPolicy %s should exist after make deploy", policyName)
+			}
+		})
+
 		t.Run("should ensure the metrics endpoint is serving metrics", func(t *testing.T) {
 			t.Cleanup(func() { collectDebugInfo(t) })
 
@@ -311,6 +324,7 @@ func TestManager(t *testing.T) { //nolint:gocyclo
 			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
 				"--namespace", operatorNamespace,
 				"--image=curlimages/curl:latest",
+				"--labels=claw.sandbox.redhat.com/metrics-reader=true",
 				"--overrides",
 				fmt.Sprintf(`{
 					"spec": {
@@ -1811,6 +1825,7 @@ func fetchFreshMetrics(t *testing.T, podName string) string {
 	cmd = exec.Command("kubectl", "run", podName, "--restart=Never",
 		"--namespace", operatorNamespace,
 		"--image=curlimages/curl:latest",
+		"--labels=claw.sandbox.redhat.com/metrics-reader=true",
 		"--overrides",
 		fmt.Sprintf(`{
 			"spec": {
