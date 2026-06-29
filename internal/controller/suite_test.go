@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -272,6 +273,9 @@ func createClawInstance(t *testing.T, ctx context.Context, name, namespace strin
 			},
 		},
 	}
+	// Memory off so shared envtest suites are not perturbed by the default-on
+	// memory stack. The default-on path is covered by the memory-stack tests.
+	instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 	require.NoError(t, k8sClient.Create(ctx, instance), "failed to create Claw instance")
 }
 
@@ -286,6 +290,9 @@ func createClawInstanceMITMOnly(t *testing.T, ctx context.Context, name, namespa
 	instance.Name = name
 	instance.Namespace = namespace
 	instance.Spec.Credentials = testCredentialsMITMOnly()
+	// Memory off so shared envtest suites are not perturbed by the default-on
+	// memory stack. The default-on path is covered by the memory-stack tests.
+	instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 	require.NoError(t, k8sClient.Create(ctx, instance), "failed to create Claw instance")
 }
 

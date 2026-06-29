@@ -85,6 +85,7 @@ const (
 	ConditionTypeRestrictionsEnforced = "RestrictionsEnforced"
 	ConditionTypePluginCompatibility  = "PluginCompatibility"
 	ConditionTypeVersionDowngrade     = "VersionDowngrade"
+	ConditionTypeMemoryStack          = "MemoryStack"
 )
 
 // Annotation keys used on pod templates to trigger rollouts on config changes.
@@ -111,6 +112,9 @@ const (
 	ConditionReasonIncompatible         = "Incompatible"
 	ConditionReasonVersionDowngrade     = "VersionDowngrade"
 	ConditionReasonInitContainerFailure = "InitContainerFailure"
+	ConditionReasonMemoryStackDisabled  = "Disabled"
+	ConditionReasonMemoryStackEnabled   = "Enabled"
+	ConditionReasonMemoryStackNoVectors = "EnabledNoVectors"
 )
 
 // SecretRefEntry references a specific key in a Secret.
@@ -340,6 +344,26 @@ type WebFetchSpec struct {
 	// the proxy allowlist.
 	// +kubebuilder:default=true
 	Enabled bool `json:"enabled"`
+}
+
+// MemorySpec configures the operator-managed memory/context stack.
+type MemorySpec struct {
+	// Enabled controls the memory/context stack. Defaults to false (opt-in).
+	// Set spec.memory.enabled: true to turn on the memory/context stack
+	// (native vectors, memory-wiki, dreaming). A nil or absent field means
+	// disabled.
+	// +optional
+	// +kubebuilder:default=false
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Lossless additionally installs the third-party lossless-claw context
+	// engine (an npm plugin) and selects it as the context engine. Defaults to
+	// false: the native memory layers (vectors, memory-wiki, dreaming) do not
+	// require it. Requires plugin installation to be allowed
+	// (spec.restrictions.pluginInstallation).
+	// +optional
+	// +kubebuilder:default=false
+	Lossless *bool `json:"lossless,omitempty"`
 }
 
 // AuthMode selects the gateway authentication mechanism.
@@ -798,6 +822,12 @@ type ClawSpec struct {
 	// "npm:@martian-engineering/lossless-claw").
 	// +optional
 	Plugins []string `json:"plugins,omitempty"`
+
+	// Memory configures the operator-managed memory/context stack (lossless-claw
+	// context engine, vector recall, memory-wiki). Disabled by default (opt-in).
+	// Set spec.memory.enabled: true to activate the stack.
+	// +optional
+	Memory *MemorySpec `json:"memory,omitempty"`
 
 	// Workspace configures workspace file seeding and bootstrap behavior.
 	// Files are seeded once (seedIfMissing) — user edits are preserved.

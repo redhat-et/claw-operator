@@ -51,13 +51,15 @@ func pluginPackageName(spec string) string {
 
 // effectivePlugins returns the complete list of plugins to install: explicit
 // spec.plugins plus any implicitly required by the configured credentials
-// (e.g., Vertex AI SDK providers that need an external plugin).
-// Duplicates are removed by package name (spec declarations take precedence
-// over implicit ones, allowing users to override the pinned version).
+// (e.g., Vertex AI SDK providers) and by the default memory stack
+// (lossless-claw). Duplicates are removed by package name (spec declarations
+// take precedence over implicit ones, allowing users to override the pinned
+// version or source).
 func effectivePlugins(instance *clawv1alpha1.Claw) []string {
-	implicit := requiredProviderPlugins(instance)
-	implicit = append(implicit, requiredDiagnosticsPlugins(instance)...)
-	if len(implicit) == 0 {
+	extra := requiredProviderPlugins(instance)
+	extra = append(extra, requiredDiagnosticsPlugins(instance)...)
+	extra = append(extra, memoryStackPlugins(instance)...)
+	if len(extra) == 0 {
 		return instance.Spec.Plugins
 	}
 	seen := make(map[string]bool, len(instance.Spec.Plugins))
@@ -65,7 +67,7 @@ func effectivePlugins(instance *clawv1alpha1.Claw) []string {
 		seen[pluginPackageName(p)] = true
 	}
 	merged := append([]string{}, instance.Spec.Plugins...)
-	for _, p := range implicit {
+	for _, p := range extra {
 		if !seen[pluginPackageName(p)] {
 			merged = append(merged, p)
 			seen[pluginPackageName(p)] = true

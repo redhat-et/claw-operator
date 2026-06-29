@@ -816,6 +816,9 @@ func createClawInstanceWithMcpServers(t *testing.T, ctx context.Context, name, n
 			Credentials: testCredentials(),
 			McpServers:  mcpServers,
 			Network:     net,
+			// Memory off so egress envtest suites are not perturbed by the
+			// default-on memory stack. The default-on path is covered separately.
+			Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 		},
 	}
 	require.NoError(t, k8sClient.Create(ctx, instance))

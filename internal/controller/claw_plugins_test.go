@@ -69,6 +69,10 @@ func testClawWithPlugins(plugins []string) *clawv1alpha1.Claw {
 		ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
 		Spec: clawv1alpha1.ClawSpec{
 			Plugins: plugins,
+			// Memory off so these plugin tests stay focused on spec.plugins +
+			// provider-plugin logic. The default-on memory stack is covered by
+			// the memory-stack tests.
+			Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 		},
 	}
 }
@@ -434,6 +438,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "gateway container image not found")
 	})
+
 }
 
 // --- effectivePlugins and requiredProviderPlugins tests ---
@@ -510,6 +515,7 @@ func TestEffectivePlugins(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			Spec: clawv1alpha1.ClawSpec{
 				Plugins: []string{"@openclaw/matrix"},
+				Memory:  &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 				Credentials: []clawv1alpha1.CredentialSpec{
 					{Name: "g", Type: clawv1alpha1.CredentialTypeAPIKey, Provider: "google"},
 				},
@@ -522,6 +528,7 @@ func TestEffectivePlugins(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			Spec: clawv1alpha1.ClawSpec{
 				Plugins: []string{"@openclaw/matrix"},
+				Memory:  &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 				Credentials: []clawv1alpha1.CredentialSpec{
 					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
 						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
@@ -538,6 +545,7 @@ func TestEffectivePlugins(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			Spec: clawv1alpha1.ClawSpec{
 				Plugins: []string{"@openclaw/anthropic-vertex-provider"},
+				Memory:  &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 				Credentials: []clawv1alpha1.CredentialSpec{
 					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
 						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
@@ -551,6 +559,7 @@ func TestEffectivePlugins(t *testing.T) {
 	t.Run("returns implicit plugins when spec.plugins is empty", func(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			Spec: clawv1alpha1.ClawSpec{
+				Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 				Credentials: []clawv1alpha1.CredentialSpec{
 					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
 						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
@@ -641,6 +650,9 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/matrix"}
+		// Memory off: this test is focused on spec.plugins wiring; the
+		// default-on memory stack is covered by the memory-stack tests.
+		instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
 		reconciler := createClawReconciler()
@@ -713,6 +725,9 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/matrix", "@openclaw/diagnostics-otel"}
+		// Memory off: this test is focused on spec.plugins wiring; the
+		// default-on memory stack is covered by the memory-stack tests.
+		instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
 		reconciler := createClawReconciler()
@@ -749,6 +764,9 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/diagnostics-otel"}
 		instance.Spec.Traces = &clawv1alpha1.TracesSpec{Enabled: true, Endpoint: "http://otel-collector.default.svc:4318"}
+		// Memory off: this test is focused on spec.plugins wiring; the
+		// memory stack is covered by the memory-stack tests.
+		instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 		smDisabled := false
 		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{
 			Enabled:        true,
