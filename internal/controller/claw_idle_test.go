@@ -167,13 +167,26 @@ func TestClawIdling(t *testing.T) {
 			deleteAndWaitAllResources(t, namespace)
 		})
 
-		createClawInstance(t, ctx, testInstanceName, namespace)
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testInstanceName,
+				Namespace: namespace,
+			},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: testCredentials(),
+				Plugins:     []string{"@openclaw/example"},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
 		reconciler := createClawReconciler()
 
 		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
 
 		// Idle
-		instance := &clawv1alpha1.Claw{}
 		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: testInstanceName, Namespace: namespace}, instance))
 		instance.Spec.Idle = true
 		require.NoError(t, k8sClient.Update(ctx, instance))
@@ -181,8 +194,14 @@ func TestClawIdling(t *testing.T) {
 		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
 
 		// Reconcile again while still idled — should succeed without errors
-		// Need to re-fetch since status was updated
+		// Need to re-fetch since status was updated. Clear the tracking snapshot
+		// so the already-idled reconcile path must restore both audit annotations.
 		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: testInstanceName, Namespace: namespace}, instance))
+		base := instance.DeepCopy()
+		delete(instance.Annotations, clawv1alpha1.AnnotationKeyTrackedCredentials)
+		delete(instance.Annotations, clawv1alpha1.AnnotationKeyTrackedPlugins)
+		require.NoError(t, k8sClient.Patch(ctx, instance, client.MergeFrom(base)))
+
 		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
 
 		// Verify still idled
@@ -190,6 +209,8 @@ func TestClawIdling(t *testing.T) {
 		idleCond := meta.FindStatusCondition(instance.Status.Conditions, clawv1alpha1.ConditionTypeIdle)
 		require.NotNil(t, idleCond, "Idle condition should still be present")
 		assert.Equal(t, metav1.ConditionTrue, idleCond.Status)
+		assert.Equal(t, `["gemini"]`, instance.Annotations[clawv1alpha1.AnnotationKeyTrackedCredentials])
+		assert.Equal(t, `["@openclaw/example"]`, instance.Annotations[clawv1alpha1.AnnotationKeyTrackedPlugins])
 
 		for _, name := range []string{
 			getClawDeploymentName(testInstanceName),
@@ -235,6 +256,43 @@ func TestClawIdling(t *testing.T) {
 		require.NotNil(t, readyCond, "Ready condition should be present")
 		assert.Equal(t, metav1.ConditionFalse, readyCond.Status)
 		assert.Equal(t, clawv1alpha1.ConditionReasonIdle, readyCond.Reason)
+	})
+
+	t.Run("should update audit tracking annotations while idled", func(t *testing.T) {
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testInstanceName,
+				Namespace: namespace,
+			},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{
+						Name:     "gemini",
+						Provider: "google",
+						Type:     clawv1alpha1.CredentialTypeAPIKey,
+						SecretRef: []clawv1alpha1.SecretRefEntry{
+							{Name: aiModelSecret, Key: aiModelSecretKey},
+						},
+					},
+				},
+				Plugins: []string{"@openclaw/example"},
+				Idle:    true,
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconcileClaw(t, ctx, createClawReconciler(), testInstanceName, namespace)
+
+		require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: testInstanceName, Namespace: namespace}, instance))
+		assert.Equal(t, `["gemini"]`, instance.Annotations[clawv1alpha1.AnnotationKeyTrackedCredentials])
+		assert.Equal(t, `["@openclaw/example"]`, instance.Annotations[clawv1alpha1.AnnotationKeyTrackedPlugins])
 	})
 
 	t.Run("should complete full status transition Ready→Idle→Ready", func(t *testing.T) {

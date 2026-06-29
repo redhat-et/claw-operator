@@ -139,15 +139,21 @@ func (r *ClawResourceReconciler) applyGatewaySecret(ctx context.Context, instanc
 			logger.Info("Gateway secret already exists with token, skipping generation", "name", secretName)
 			// no need to generate new token, just ensure owner reference is set
 			return r.doCreateGatewaySecret(ctx, instance, string(existingToken))
-		} else {
-			// Secret exists but missing or empty token - generate new one
-			logger.Info("Gateway secret exists but missing token, generating new one")
-			token, err := generateGatewayToken()
-			if err != nil {
-				return fmt.Errorf("failed to generate gateway token: %w", err)
-			}
-			return r.doCreateGatewaySecret(ctx, instance, token)
 		}
+		// Secret exists but missing or empty token - generate new one
+		logger.Info("Gateway secret exists but missing token, generating new one")
+		token, err := generateGatewayToken()
+		if err != nil {
+			return fmt.Errorf("failed to generate gateway token: %w", err)
+		}
+		if err := r.doCreateGatewaySecret(ctx, instance, token); err != nil {
+			return err
+		}
+		if r.Recorder != nil {
+			r.Recorder.Eventf(instance, corev1.EventTypeNormal, "GatewayTokenRotated",
+				"Gateway token Secret %q was missing the token key and has been regenerated", secretName)
+		}
+		return nil
 	} else if apierrors.IsNotFound(err) {
 		// Secret doesn't exist - generate new token
 		logger.Info("Gateway secret does not exist, generating new token")
@@ -155,7 +161,14 @@ func (r *ClawResourceReconciler) applyGatewaySecret(ctx context.Context, instanc
 		if err != nil {
 			return fmt.Errorf("failed to generate gateway token: %w", err)
 		}
-		return r.doCreateGatewaySecret(ctx, instance, token)
+		if err := r.doCreateGatewaySecret(ctx, instance, token); err != nil {
+			return err
+		}
+		if r.Recorder != nil {
+			r.Recorder.Eventf(instance, corev1.EventTypeNormal, "GatewayTokenRotated",
+				"Gateway token Secret %q did not exist and has been created with a new token", secretName)
+		}
+		return nil
 	} else {
 		// Error fetching secret
 		return fmt.Errorf("failed to check for existing gateway secret: %w", err)

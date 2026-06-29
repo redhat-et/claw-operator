@@ -59,6 +59,9 @@ func (r *ClawResourceReconciler) handleIdle(ctx context.Context, instance *clawv
 		instance.Status.URL == "" //nolint:staticcheck // deprecated but still checked
 
 	if alreadyIdled {
+		if err := r.emitAuditTrackingEvents(ctx, instance); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update audit tracking annotations while idled: %w", err)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -73,6 +76,10 @@ func (r *ClawResourceReconciler) handleIdle(ctx context.Context, instance *clawv
 
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status after idling: %w", err)
+	}
+
+	if err := r.emitAuditTrackingEvents(ctx, instance); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update audit tracking annotations while idled: %w", err)
 	}
 
 	return ctrl.Result{}, nil

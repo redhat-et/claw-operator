@@ -96,6 +96,16 @@ const (
 	AnnotationSuffixSecretVersion    = "-secret-version"
 	AnnotationPrefixMcpSecretVersion = "claw.sandbox.redhat.com/mcp-"
 	AnnotationSuffixMcpSecretVersion = "-secret-version"
+
+	// AnnotationKeyTrackedCredentials stores a JSON-encoded sorted list of credential names
+	// from the previous reconcile so the operator can emit CredentialAdded/CredentialRemoved
+	// audit events only when the list actually changes.
+	AnnotationKeyTrackedCredentials = "claw.sandbox.redhat.com/tracked-credentials"
+
+	// AnnotationKeyTrackedPlugins stores a JSON-encoded sorted list of active plugin names
+	// from the previous reconcile so the operator can emit PluginInstalled/PluginRemoved
+	// audit events only when the list actually changes.
+	AnnotationKeyTrackedPlugins = "claw.sandbox.redhat.com/tracked-plugins"
 )
 
 // Condition reasons for Claw status.
