@@ -96,6 +96,7 @@ rules:
   verbs:
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - monitoring.coreos.com
