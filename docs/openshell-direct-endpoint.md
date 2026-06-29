@@ -1,8 +1,8 @@
-# Using OpenShell With The Claw Operator
+# Using OpenShell Through A Direct Gateway Endpoint
 
 This guide deploys an OpenClaw `Claw` that keeps provider and channel traffic
 on the `claw-proxy` path while running agent exec sessions in OpenShell-managed
-sandbox pods.
+sandbox pods through an existing OpenShell gateway endpoint.
 
 For the security model and network boundary details, see
 [openshell-security-boundaries.md](openshell-security-boundaries.md).
@@ -21,20 +21,27 @@ gateway stays in the normal OpenClaw namespace. When an agent needs command
 execution, OpenClaw calls the OpenShell sandbox plugin, which asks that user's
 OpenShell gateway to create or reuse a sandbox pod.
 
+This integration does not deploy, own, or reconcile the OpenShell gateway. The
+`Claw` resource only names an existing in-cluster Service endpoint in
+`spec.openshell.gatewayEndpoint`; the gateway deployment, namespace, SCC grants,
+Agent Sandbox CRDs, and sandbox lifecycle remain outside the claw-operator.
+
 ## Prerequisites
 
 You need:
 
 - a cluster with the `claw-operator` installed
-- the updated `Claw` and `OpenShellGateway` CRDs installed
+- the updated `Claw` CRD installed
 - `oc` or `kubectl`
+- a standalone OpenShell gateway already running in-cluster
 - an OpenClaw image that contains the OpenShell CLI at
   `/opt/openshell/bin/openshell`
 - an OpenShell sandbox image reachable by the cluster
 - provider credentials stored as Kubernetes Secrets in the OpenClaw namespace
 
-The OpenShell Kubernetes driver uses the Agent Sandbox API. Install its CRDs
-once per cluster:
+The OpenShell Kubernetes driver uses the Agent Sandbox API. If you own the
+standalone OpenShell deployment, make sure its CRDs are installed once per
+cluster:
 
 ```shell
 AGENT_SANDBOX_REPO=https://github.com/kubernetes-sigs/agent-sandbox
@@ -44,7 +51,7 @@ kubectl get crd sandboxes.agents.x-k8s.io
 ```
 
 On OpenShift, the current OpenShell sandbox path needs privileged SCC for the
-sandbox ServiceAccount. Keep that grant in the OpenShell namespace, not the
+sandbox ServiceAccount. That grant belongs to the OpenShell namespace, not the
 OpenClaw namespace.
 
 ## Build Images
@@ -68,43 +75,21 @@ podman push "${SANDBOX_IMAGE}"
 See [openshell-images/README.md](../openshell-images/README.md) for build args
 and image contents.
 
-## Deploy An OpenShell Gateway
+## Locate An Existing OpenShell Gateway
 
-Create the OpenShell namespace:
+This guide assumes the OpenShell gateway is deployed independently from the
+claw-operator. The gateway must expose an in-cluster Service DNS endpoint that
+the Claw gateway can reach.
 
-```shell
-oc new-project openshell-alice
-```
-
-Create an `OpenShellGateway` in that namespace:
-
-```yaml
-apiVersion: claw.sandbox.redhat.com/v1alpha1
-kind: OpenShellGateway
-metadata:
-  name: openshell
-  namespace: openshell-alice
-spec:
-  sandboxImage: quay.io/<org>/openclaw-openshell-sandbox:latest
-  openShift:
-    privilegedSandboxSCC: true
-```
-
-Apply it:
+For example, a standalone gateway Service in `openshell-alice` might be:
 
 ```shell
-oc apply -f openshellgateway.yaml
-oc wait -n openshell-alice openshellgateway/openshell \
-  --for=condition=Ready \
-  --timeout=180s
-oc get openshellgateway -n openshell-alice
-```
-
-The operator reports the in-cluster endpoint in `.status.endpoint`, typically:
-
-```text
 http://openshell.openshell-alice.svc.cluster.local:8080
 ```
+
+The endpoint must use Service DNS, not an external route, and the Service must
+define `spec.selector`. The operator uses the Service DNS name for `NO_PROXY`
+and the Service selector for the NetworkPolicy egress target.
 
 ## Deploy A Claw With OpenShell
 
@@ -135,9 +120,7 @@ spec:
           key: api-key
   openshell:
     enabled: true
-    gatewayRef:
-      name: openshell
-      namespace: openshell-alice
+    gatewayEndpoint: http://openshell.openshell-alice.svc.cluster.local:8080
     openClawImage: quay.io/<org>/openclaw:openshell
     sandboxImage: quay.io/<org>/openclaw-openshell-sandbox:latest
     mode: remote
@@ -153,8 +136,8 @@ oc wait -n openclaw-alice claw/alice \
 oc rollout status -n openclaw-alice deployment/alice
 ```
 
-If the OpenShell gateway is not ready yet, the `Claw` reports
-`OpenShellConfigured=False` with reason `Provisioning` and reconciles again.
+If `gatewayEndpoint` is missing or does not use in-cluster Service DNS, the
+`Claw` reports `OpenShellConfigured=False` with reason `ValidationFailed`.
 
 ## What The Operator Configures
 
@@ -162,11 +145,16 @@ When `spec.openshell.enabled` is true, the operator:
 
 1. installs the `@openclaw/openshell-sandbox` OpenClaw runtime plugin
 2. writes OpenShell sandbox defaults into `operator.json`
-3. points the plugin at the referenced OpenShell gateway endpoint
+3. points the plugin at `spec.openshell.gatewayEndpoint`
 4. sets the sandbox image passed to OpenShell
 5. adds `NO_PROXY` entries for the OpenShell gateway Service
 6. adds NetworkPolicy egress from the Claw gateway to the OpenShell gateway
 7. uses `spec.openshell.openClawImage` for the OpenClaw gateway and init images
+
+The operator does not create OpenShell Deployments, Services, sandboxes,
+Sandbox CRs, RBAC, SCC grants, or namespace policies for the OpenShell side.
+Those must already be provided by the OpenShell deployment you point
+`gatewayEndpoint` at.
 
 Provider and channel credentials remain on the normal `claw-proxy` path. The
 OpenShell sandbox pod should not receive provider API keys by default.
@@ -206,29 +194,11 @@ Expected result:
 - the agent command output returns in the Claw UI
 - provider requests still flow through `claw-proxy`
 
-## Direct Endpoint Option
-
-If the OpenShell gateway was not created by an `OpenShellGateway` CR, use a
-direct in-cluster endpoint instead:
-
-```yaml
-spec:
-  openshell:
-    enabled: true
-    gatewayEndpoint: http://openshell.openshell-alice.svc.cluster.local:8080
-    openClawImage: quay.io/<org>/openclaw:openshell
-    sandboxImage: quay.io/<org>/openclaw-openshell-sandbox:latest
-```
-
-The endpoint must use in-cluster Service DNS so the operator can derive
-`NO_PROXY` hosts and a NetworkPolicy egress target.
-
 ## Troubleshooting
 
-If the `OpenShellGateway` CR exists but no pods appear, check operator logs and
-RBAC. The operator must be running with the OpenShellGateway controller and RBAC
-that can create Services, Deployments, Roles, RoleBindings, ClusterRoles, and
-Agent Sandbox resources.
+If the standalone OpenShell gateway has no pods, check the deployment mechanism
+that owns that gateway. This operator only configures the Claw gateway to call
+the endpoint in `spec.openshell.gatewayEndpoint`.
 
 If the Claw reports `OpenShellConfigured=False`, inspect the condition message:
 
@@ -242,6 +212,7 @@ If agent exec reports `spawn /opt/openshell/bin/openshell ENOENT`, the
 If the agent hangs while creating a sandbox, check:
 
 - the Claw gateway can reach the OpenShell gateway Service
+- the OpenShell gateway Service has a non-empty `spec.selector`
 - the generated NetworkPolicy allows that egress
 - `NO_PROXY` includes the OpenShell Service DNS names
 - the OpenShell namespace has the required OpenShift SCC setup

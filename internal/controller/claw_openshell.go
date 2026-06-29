@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -39,6 +39,7 @@ const (
 	defaultOpenShellPluginGateway = "openshell"
 	defaultOpenShellPluginMode    = clawv1alpha1.OpenShellModeRemote
 	defaultOpenShellTimeout       = int32(180)
+	defaultOpenShellSandboxImage  = "quay.io/sallyom/openclaw-openshell-sandbox:latest"
 )
 
 type resolvedOpenShell struct {
@@ -52,13 +53,21 @@ type resolvedOpenShell struct {
 }
 
 type openShellEgressTarget struct {
-	Name      string
-	Namespace string
-	Port      int
+	Name        string
+	Namespace   string
+	Port        int
+	PodSelector map[string]string
 }
 
 func openShellEnabled(instance *clawv1alpha1.Claw) bool {
 	return instance.Spec.OpenShell != nil && instance.Spec.OpenShell.Enabled
+}
+
+func valueOrDefault(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }
 
 func (r *ClawResourceReconciler) resolveOpenShell(
@@ -84,61 +93,37 @@ func (r *ClawResourceReconciler) resolveOpenShell(
 		resolved.TimeoutSeconds = *spec.TimeoutSeconds
 	}
 
-	var serviceName, serviceNamespace string
-	servicePort := 0
-	if spec.GatewayRef != nil {
-		refNamespace := valueOrDefault(spec.GatewayRef.Namespace, instance.Namespace)
-		gateway := &clawv1alpha1.OpenShellGateway{}
-		key := types.NamespacedName{Name: spec.GatewayRef.Name, Namespace: refNamespace}
-		if err := r.Get(ctx, key, gateway); err != nil {
-			return resolvedOpenShell{}, ctrl.Result{}, fmt.Errorf("resolve OpenShell gatewayRef %s/%s: %w", refNamespace, spec.GatewayRef.Name, err)
-		}
-		if gateway.Status.Endpoint == "" {
-			setCondition(instance, clawv1alpha1.ConditionTypeOpenShellConfigured,
-				metav1.ConditionFalse, clawv1alpha1.ConditionReasonProvisioning,
-				fmt.Sprintf("OpenShellGateway %s/%s has no endpoint yet", refNamespace, spec.GatewayRef.Name))
-			setCondition(instance, clawv1alpha1.ConditionTypeReady,
-				metav1.ConditionFalse, clawv1alpha1.ConditionReasonProvisioning,
-				fmt.Sprintf("OpenShellGateway %s/%s is not ready", refNamespace, spec.GatewayRef.Name))
-			return resolvedOpenShell{}, ctrl.Result{Requeue: true, RequeueAfter: 5 * time.Second}, nil
-		}
-		resolved.Endpoint = gateway.Status.Endpoint
-		serviceName = valueOrDefault(gateway.Status.ServiceName, gateway.Name)
-		serviceNamespace = gateway.Namespace
-		servicePort = int(gateway.Spec.ServicePort)
-		if servicePort == 0 {
-			servicePort = int(openShellGatewayConfigFor(gateway).ServicePort)
-		}
-	} else {
-		resolved.Endpoint = strings.TrimSpace(spec.GatewayEndpoint)
-	}
-
+	resolved.Endpoint = strings.TrimSpace(spec.GatewayEndpoint)
 	if resolved.Endpoint == "" {
-		return resolvedOpenShell{}, ctrl.Result{}, fmt.Errorf("spec.openshell requires gatewayRef or gatewayEndpoint")
+		return resolvedOpenShell{}, ctrl.Result{}, fmt.Errorf("spec.openshell.gatewayEndpoint is required when spec.openshell.enabled is true")
 	}
 
-	if serviceName == "" {
-		target, err := openShellTargetFromEndpoint(resolved.Endpoint, instance.Namespace)
-		if err != nil {
-			return resolvedOpenShell{}, ctrl.Result{}, err
-		}
-		serviceName = target.Name
-		serviceNamespace = target.Namespace
-		servicePort = target.Port
+	target, err := openShellTargetFromEndpoint(resolved.Endpoint, instance.Namespace)
+	if err != nil {
+		return resolvedOpenShell{}, ctrl.Result{}, err
 	}
-	if servicePort == 0 {
-		servicePort = 8080
+	if err := r.resolveOpenShellServiceSelector(ctx, &target); err != nil {
+		return resolvedOpenShell{}, ctrl.Result{}, err
 	}
-	resolved.EgressTarget = &openShellEgressTarget{
-		Name:      serviceName,
-		Namespace: serviceNamespace,
-		Port:      servicePort,
-	}
-	resolved.NoProxyHosts = openShellNoProxyHosts(serviceName, serviceNamespace)
+	resolved.EgressTarget = &target
+	resolved.NoProxyHosts = openShellNoProxyHosts(target.Name, target.Namespace)
 	setCondition(instance, clawv1alpha1.ConditionTypeOpenShellConfigured,
 		metav1.ConditionTrue, clawv1alpha1.ConditionReasonConfigured,
 		"OpenShell sandbox backend configured")
 	return resolved, ctrl.Result{}, nil
+}
+
+func (r *ClawResourceReconciler) resolveOpenShellServiceSelector(ctx context.Context, target *openShellEgressTarget) error {
+	service := &corev1.Service{}
+	key := types.NamespacedName{Name: target.Name, Namespace: target.Namespace}
+	if err := r.Get(ctx, key, service); err != nil {
+		return fmt.Errorf("resolve OpenShell gateway Service %s/%s: %w", target.Namespace, target.Name, err)
+	}
+	if len(service.Spec.Selector) == 0 {
+		return fmt.Errorf("OpenShell gateway Service %s/%s must define spec.selector for NetworkPolicy egress", target.Namespace, target.Name)
+	}
+	target.PodSelector = service.Spec.Selector
+	return nil
 }
 
 func openShellTargetFromEndpoint(rawEndpoint, defaultNamespace string) (openShellEgressTarget, error) {
@@ -212,7 +197,7 @@ func injectOpenShellConfig(config map[string]any, resolved resolvedOpenShell) {
 	}
 }
 
-func injectOpenShellGatewayEgressRule(objects []*unstructured.Unstructured, instanceName string, resolved resolvedOpenShell) error {
+func injectOpenShellEgressRule(objects []*unstructured.Unstructured, instanceName string, resolved resolvedOpenShell) error {
 	if !resolved.Enabled || resolved.EgressTarget == nil {
 		return nil
 	}
@@ -229,7 +214,7 @@ func injectOpenShellGatewayEgressRule(objects []*unstructured.Unstructured, inst
 		if !found {
 			egress = []any{}
 		}
-		egress = append(egress, buildOpenShellGatewayEgressRule(*resolved.EgressTarget))
+		egress = append(egress, buildOpenShellEgressRule(*resolved.EgressTarget))
 		if err := unstructured.SetNestedSlice(obj.Object, egress, "spec", "egress"); err != nil {
 			return fmt.Errorf("failed to set egress rules on NetworkPolicy: %w", err)
 		}
@@ -238,7 +223,7 @@ func injectOpenShellGatewayEgressRule(objects []*unstructured.Unstructured, inst
 	return fmt.Errorf("NetworkPolicy %q not found in manifests", npName)
 }
 
-func buildOpenShellGatewayEgressRule(target openShellEgressTarget) map[string]any {
+func buildOpenShellEgressRule(target openShellEgressTarget) map[string]any {
 	return map[string]any{
 		"to": []any{
 			map[string]any{
@@ -248,7 +233,7 @@ func buildOpenShellGatewayEgressRule(target openShellEgressTarget) map[string]an
 					},
 				},
 				"podSelector": map[string]any{
-					"matchLabels": openShellGatewaySelector(target.Name),
+					"matchLabels": target.PodSelector,
 				},
 			},
 		},

@@ -78,21 +78,22 @@ func TestOpenShellTargetFromEndpoint(t *testing.T) {
 	}, openShellNoProxyHosts(target.Name, target.Namespace))
 }
 
-func TestInjectOpenShellGatewayEgressRule(t *testing.T) {
+func TestInjectOpenShellEgressRule(t *testing.T) {
 	np := &unstructured.Unstructured{}
 	np.SetKind(NetworkPolicyKind)
 	np.SetName(getEgressNetworkPolicyName(testInstanceName))
 	np.Object["spec"] = map[string]any{"egress": []any{}}
 
-	err := injectOpenShellGatewayEgressRule(
+	err := injectOpenShellEgressRule(
 		[]*unstructured.Unstructured{np},
 		testInstanceName,
 		resolvedOpenShell{
 			Enabled: true,
 			EgressTarget: &openShellEgressTarget{
-				Name:      "openshell",
-				Namespace: "openshell-alice",
-				Port:      8080,
+				Name:        "openshell",
+				Namespace:   "openshell-alice",
+				Port:        8080,
+				PodSelector: map[string]string{"gateway": "openshell"},
 			},
 		},
 	)
@@ -116,10 +117,7 @@ func TestInjectOpenShellGatewayEgressRule(t *testing.T) {
 		namespaceSelector["matchLabels"].(map[string]any)["kubernetes.io/metadata.name"],
 	)
 	podSelector := peer["podSelector"].(map[string]any)
-	assert.Equal(t, map[string]string{
-		"app.kubernetes.io/name":     "openshell",
-		"app.kubernetes.io/instance": "openshell",
-	}, podSelector["matchLabels"])
+	assert.Equal(t, map[string]string{"gateway": "openshell"}, podSelector["matchLabels"])
 }
 
 func TestConfigureGatewayOpenShellNoProxy(t *testing.T) {

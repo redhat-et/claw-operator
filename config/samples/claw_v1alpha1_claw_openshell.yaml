@@ -12,9 +12,9 @@ spec:
       provider: openai
   openshell:
     enabled: true
-    gatewayRef:
-      name: openshell
-      namespace: openshell-alice
+    # Existing in-cluster OpenShell gateway Service. The claw-operator does not
+    # deploy or manage the OpenShell gateway.
+    gatewayEndpoint: http://openshell.openshell-alice.svc.cluster.local:8080
     openClawImage: quay.io/sallyom/openclaw:openshell
     sandboxImage: quay.io/sallyom/openclaw-openshell-sandbox:latest
     mode: remote

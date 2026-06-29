@@ -20,6 +20,11 @@ gateway uses the claw-operator managed credential proxy. This keeps the
 credential and L7 provider-control boundary in the existing proxy while moving
 agent execution into OpenShell-managed sandbox pods.
 
+This direct-endpoint integration assumes an OpenShell gateway already exists. The
+claw-operator only configures OpenClaw to call that endpoint; it does not deploy
+or manage the OpenShell-side control plane, gateway, sandbox CRDs, SCC grants,
+RBAC, or sandbox pod lifecycle.
+
 ## Assumptions
 
 - The Claw gateway still runs with `claw-proxy` enabled for provider and channel
@@ -29,6 +34,8 @@ agent execution into OpenShell-managed sandbox pods.
   `openshell-alice`.
 - OpenShell sandbox pods are created in the OpenShell namespace, not in the
   Claw namespace.
+- `spec.openshell.gatewayEndpoint` points to an existing in-cluster OpenShell
+  gateway Service with a non-empty selector.
 - The OpenClaw image contains the OpenShell CLI plus the local tools required by
   the plugin, currently `ssh`.
 
@@ -95,6 +102,10 @@ credential proxy by mistake. This bypass should be specific to the OpenShell
 gateway endpoint instead of enabling broad in-cluster bypass unless the user
 explicitly requests broad bypass.
 
+For direct endpoints, the endpoint must name an in-cluster Service with a
+non-empty `spec.selector`; the operator uses that selector as the NetworkPolicy
+egress target.
+
 ## Sandbox Egress
 
 OpenShell sandbox pod egress is controlled by policies in the OpenShell
@@ -111,13 +122,13 @@ For a secure default, the OpenShell namespace should use default-deny egress for
 sandbox pods and then add only the minimum rules required for OpenShell control
 traffic, DNS if needed, and any cluster-admin-approved outbound destinations.
 
-## Operator Responsibilities
+## Claw-Operator Responsibilities
 
 When `spec.openshell` is enabled, the claw-operator:
 
 1. Configure OpenClaw to use the OpenShell sandbox plugin.
-2. Configure the OpenShell gateway endpoint from an `OpenShellGateway`
-   reference or an explicit in-cluster endpoint.
+2. Configure the OpenShell gateway endpoint from
+   `spec.openshell.gatewayEndpoint`.
 3. Optionally override the OpenClaw image with
    `spec.openshell.openClawImage`, which should include the OpenShell CLI and
    plugin runtime dependencies.
@@ -126,6 +137,10 @@ When `spec.openshell` is enabled, the claw-operator:
 6. Keep provider and channel traffic routed through `claw-proxy`.
 7. Default the plugin to OpenShell `remote` mode unless mirror synchronization
    is fixed and validated.
+
+It does not reconcile OpenShell-side infrastructure. The OpenShell deployment
+must provide the gateway Service, sandbox API dependencies, OpenShift SCC/RBAC,
+and any namespace egress policy before the `Claw` references it.
 
 This keeps the credential and L7 provider-control boundary in the existing proxy
 while moving agent execution into OpenShell-managed sandbox pods.

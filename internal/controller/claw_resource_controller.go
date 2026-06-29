@@ -898,7 +898,7 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	if err := injectMcpProxyEgressPorts(objects, mcpTargets, instance.Name); err != nil {
 		return fmt.Errorf("failed to inject MCP proxy egress ports: %w", err)
 	}
-	if err := injectOpenShellGatewayEgressRule(objects, instance.Name, resolvedOpenShell); err != nil {
+	if err := injectOpenShellEgressRule(objects, instance.Name, resolvedOpenShell); err != nil {
 		return fmt.Errorf("failed to inject OpenShell gateway egress rule: %w", err)
 	}
 	if err := injectAdditionalEgress(objects, instance); err != nil {

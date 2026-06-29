@@ -881,28 +881,10 @@ spec:
                       agent sessions.
                     type: boolean
                   gatewayEndpoint:
-                    description: |-
-                      GatewayEndpoint is an explicit in-cluster OpenShell gateway URL. Use this
-                      for gateways not represented by an OpenShellGateway object.
+                    description: GatewayEndpoint is the explicit in-cluster OpenShell
+                      gateway URL.
                     pattern: ^https?://
                     type: string
-                  gatewayRef:
-                    description: |-
-                      GatewayRef references an operator-managed OpenShellGateway. Prefer this
-                      over gatewayEndpoint so the operator can derive NetworkPolicy selectors.
-                    properties:
-                      name:
-                        description: Name is the OpenShellGateway name.
-                        minLength: 1
-                        type: string
-                      namespace:
-                        description: |-
-                          Namespace is the OpenShellGateway namespace. When omitted, the Claw
-                          namespace is used.
-                        type: string
-                    required:
-                    - name
-                    type: object
                   mode:
                     default: remote
                     description: Mode controls OpenShell workspace synchronization.
@@ -934,6 +916,10 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+                x-kubernetes-validations:
+                - message: gatewayEndpoint is required when OpenShell is enabled
+                  rule: '!has(self.enabled) || self.enabled == false || (has(self.gatewayEndpoint)
+                    && size(self.gatewayEndpoint) > 0)'
               plugins:
                 description: |-
                   Plugins lists OpenClaw plugins to install via an init container before
