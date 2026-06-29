@@ -34,16 +34,19 @@ func pluginsEnabled(instance *clawv1alpha1.Claw) bool {
 	return len(instance.Spec.Plugins) > 0
 }
 
-// pluginPackageName strips a trailing @version suffix from a plugin spec,
-// returning just the package name for deduplication purposes.
+// pluginPackageName strips an optional source scheme prefix and a trailing
+// @version suffix from a plugin spec, returning a stable key for dedup.
 func pluginPackageName(spec string) string {
-	// Scoped packages start with @, so find the LAST @ for the version separator.
-	// "@openclaw/foo@1.2.3" → "@openclaw/foo"
-	// "@openclaw/foo" → "@openclaw/foo"
-	if idx := strings.LastIndex(spec, "@"); idx > 0 {
-		return spec[:idx]
+	prefix := ""
+	if strings.HasPrefix(spec, "npm:") {
+		prefix = "npm:"
+		spec = strings.TrimPrefix(spec, "npm:")
 	}
-	return spec
+	// Scoped packages start with @, so the version separator is the LAST @.
+	if idx := strings.LastIndex(spec, "@"); idx > 0 {
+		spec = spec[:idx]
+	}
+	return prefix + spec
 }
 
 // effectivePlugins returns the complete list of plugins to install: explicit
@@ -140,6 +143,23 @@ func requiredDiagnosticsPlugins(instance *clawv1alpha1.Claw) []string {
 	return plugins
 }
 
+// shellSingleQuote wraps a string in single quotes for safe use as a single
+// shell argument, escaping any embedded single quotes.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// pluginInstallSpec returns the shell-quoted argument for
+// `openclaw plugins install`. A bare package name defaults to the clawhub
+// source for backward compatibility; an "npm:" prefix installs the bare
+// package name from npm (the openclaw CLI's default source).
+func pluginInstallSpec(pkg string) string {
+	if strings.HasPrefix(pkg, "npm:") {
+		return shellSingleQuote(strings.TrimPrefix(pkg, "npm:"))
+	}
+	return "clawhub:" + shellSingleQuote(pkg)
+}
+
 func generatePluginInstallScript(plugins []string) string {
 	var b strings.Builder
 	b.WriteString(`set -e
@@ -165,8 +185,7 @@ mkdir -p "$EXT"
 ls "$EXT" 2>/dev/null | sort > /tmp/before-plugins.txt
 `)
 	for _, pkg := range plugins {
-		escaped := "'" + strings.ReplaceAll(pkg, "'", "'\\''") + "'"
-		fmt.Fprintf(&b, "openclaw plugins install clawhub:%s\n", escaped)
+		fmt.Fprintf(&b, "openclaw plugins install %s\n", pluginInstallSpec(pkg))
 	}
 	b.WriteString(`ls "$EXT" | sort | comm -13 /tmp/before-plugins.txt - > "$MANIFEST"
 `)

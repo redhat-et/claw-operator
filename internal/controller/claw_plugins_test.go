@@ -73,6 +73,24 @@ func testClawWithPlugins(plugins []string) *clawv1alpha1.Claw {
 	}
 }
 
+// --- pluginPackageName tests ---
+
+func TestPluginPackageName(t *testing.T) {
+	t.Run("bare scoped package without version is unchanged", func(t *testing.T) {
+		assert.Equal(t, "@openclaw/foo", pluginPackageName("@openclaw/foo"))
+	})
+	t.Run("bare scoped package strips version", func(t *testing.T) {
+		assert.Equal(t, "@openclaw/foo", pluginPackageName("@openclaw/foo@1.2.3"))
+	})
+	t.Run("npm scoped package without version keeps scheme, not truncated to npm:", func(t *testing.T) {
+		assert.Equal(t, "npm:@martian-engineering/lossless-claw",
+			pluginPackageName("npm:@martian-engineering/lossless-claw"))
+	})
+	t.Run("npm scoped package strips version, keeps scheme", func(t *testing.T) {
+		assert.Equal(t, "npm:@scope/pkg", pluginPackageName("npm:@scope/pkg@1.2.3"))
+	})
+}
+
 // --- pluginsEnabled tests ---
 
 func TestPluginsEnabled(t *testing.T) {
@@ -175,6 +193,23 @@ func TestGeneratePluginInstallScript(t *testing.T) {
 		assert.Contains(t, script, `target="$EXT/$dir"`)
 		assert.Contains(t, script, `mkdir -p "$EXT"`)
 		assert.Contains(t, script, `ls "$EXT"`)
+	})
+
+	t.Run("should install npm-prefixed plugin from npm (no clawhub source)", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"npm:@martian-engineering/lossless-claw"})
+		assert.Contains(t, script, "openclaw plugins install '@martian-engineering/lossless-claw'")
+		assert.NotContains(t, script, "clawhub:")
+	})
+
+	t.Run("should keep bare plugin names on clawhub (backward compatible)", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.Contains(t, script, "openclaw plugins install clawhub:'@openclaw/matrix'")
+	})
+
+	t.Run("should mix npm and clawhub sources", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"npm:@martian-engineering/lossless-claw", "@openclaw/matrix"})
+		assert.Contains(t, script, "openclaw plugins install '@martian-engineering/lossless-claw'")
+		assert.Contains(t, script, "openclaw plugins install clawhub:'@openclaw/matrix'")
 	})
 }
 

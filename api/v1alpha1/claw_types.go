@@ -792,8 +792,10 @@ type ClawSpec struct {
 	Network *NetworkSpec `json:"network,omitempty"`
 
 	// Plugins lists OpenClaw plugins to install via an init container before
-	// the gateway starts. Each entry is a package name (e.g. "@openclaw/matrix").
-	// The operator runs `openclaw plugins install clawhub:<pkg>` for each entry.
+	// the gateway starts. A bare entry installs from clawhub (e.g.
+	// "@openclaw/matrix" runs `openclaw plugins install clawhub:@openclaw/matrix`).
+	// Prefix an entry with "npm:" to install from npm instead (e.g.
+	// "npm:@martian-engineering/lossless-claw").
 	// +optional
 	Plugins []string `json:"plugins,omitempty"`
 
