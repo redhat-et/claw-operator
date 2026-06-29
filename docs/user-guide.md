@@ -1304,6 +1304,97 @@ spec:
             enabled: false
 ```
 
+## Memory Stack
+
+The memory stack is an opt-in bundle that turns on OpenClaw's memory and context features together: semantic vector recall, the memory-wiki knowledge layer, and memory-core "dreaming" consolidation, with an optional third-party context engine. It is controlled by `spec.memory` and is off by default, so existing instances are unaffected until you enable it.
+
+There are two toggles:
+
+| Field | Default | Effect |
+|-------|---------|--------|
+| `spec.memory.enabled` | `false` | Turns on the native memory stack (vectors, memory-wiki, dreaming). |
+| `spec.memory.lossless` | `false` | Additionally installs the lossless-claw context engine (a third-party npm plugin). |
+
+### Enabling the memory stack
+
+Set `spec.memory.enabled: true`:
+
+```sh
+oc apply -n $NS -f - <<EOF
+apiVersion: claw.sandbox.redhat.com/v1alpha1
+kind: Claw
+metadata:
+  name: instance
+  namespace: $NS
+spec:
+  credentials:
+    - name: openai
+      provider: openai
+      secretRef:
+        - name: openai-api-key
+          key: api-key
+  memory:
+    enabled: true
+EOF
+```
+
+This seeds the following into the instance config on first boot:
+
+- **Vector recall.** Enables OpenClaw's memory search for semantic recall across sessions. The embedding provider is chosen from your credentials (see [Memory Search](#memory-search) for the eligibility rules). If no embedding-capable credential is present, vector recall stays off and the rest of the stack still applies (see Status below).
+- **memory-wiki (bridge mode).** Compiles your durable memory into a wiki vault at `~/.openclaw/workspace/wiki/main`, indexing daily notes, dream reports, and the memory root.
+- **memory-core dreaming.** Enables the background consolidation pass that promotes durable memories.
+- A `HEARTBEAT.md` checklist is seeded into the workspace, and a `MemoryStack` status condition is set on the Claw resource.
+
+These are OpenClaw-native capabilities (no external plugin is installed for the native stack). Because the config seeds once on first boot in `management: user` mode, your later edits are preserved across restarts. You can override any of it through `spec.config.raw`.
+
+### The lossless context engine
+
+Set `spec.memory.lossless: true` to additionally install the lossless-claw context engine and select it as the agent's context engine:
+
+```yaml
+spec:
+  memory:
+    enabled: true
+    lossless: true
+```
+
+Unlike the native layers (which provide durable, cross-session memory), the context engine manages context within a single session: it summarizes and compacts the working context as a session grows so the agent keeps more relevant information inside the token budget. `lossless-claw` is a third-party plugin published to npm (`@martian-engineering/lossless-claw`); the operator installs it from npm in an init container at pod start.
+
+The lossless layer requires plugin installation to be allowed. If `spec.restrictions.pluginInstallation` is `false`, the plugin is not installed, the native layers still apply, and the status condition notes that lossless was requested but blocked (see [Restrictions](#restrictions)).
+
+### Requirements and implications
+
+- **Embeddings for vector recall.** Vector recall needs an embedding-capable credential, which today means an OpenAI or Google API key (a Google `type: gcp` Vertex credential does not qualify). Without one, the stack still enables, but vector recall is off. See [Memory Search](#memory-search).
+- **Plugin installation for lossless.** The lossless layer pulls a package from npm at pod start, so plugin installation must be permitted.
+- **Provider usage.** Vector recall makes embedding calls, dreaming makes periodic model calls, and the lossless context engine makes summarization calls. Enabling these increases provider usage accordingly.
+- **Config ownership.** In `management: user` mode the memory config is seeded once and then owned by the instance, so runtime edits survive restarts. In merge or overwrite mode the operator reasserts it each boot. In all modes, setting the relevant keys in `spec.config.raw` takes precedence and the operator backs off.
+
+### Status
+
+The operator reports a `MemoryStack` condition on the Claw resource:
+
+| Reason | Meaning |
+|--------|---------|
+| `Disabled` | `spec.memory.enabled` is false. |
+| `Enabled` | The stack is on and vector recall is active. |
+| `EnabledNoVectors` | The stack is on but no embedding-capable credential was found, so vector recall is off. |
+
+```sh
+oc get claw instance -n $NS -o jsonpath='{range .status.conditions[?(@.type=="MemoryStack")]}{.reason}: {.message}{"\n"}{end}'
+```
+
+Inside the gateway pod you can confirm the runtime view:
+
+```sh
+openclaw config get agents.defaults.memorySearch
+openclaw plugins list | grep lossless   # only when spec.memory.lossless is true
+```
+
+### Things to keep in mind
+
+- **Wiki distillation.** memory-wiki in bridge mode imports and indexes your memory sources, but it does not yet automatically distill them into entity, concept, and synthesis pages; that distillation step is a runtime capability that is not available by default today. The wiki vault will accumulate sources, and curated pages are produced as the agent synthesizes over time rather than as an automatic batch pass.
+- **No automatic backup.** The memory stack does not push your memory to a remote git repository or take scheduled snapshots. Memory lives on the instance's persistent volume. If you want off-cluster backup, that is a manual or future workflow.
+
 ## Application Configuration
 
 The Claw CR supports `spec.config` for declarative OpenClaw application settings — diagnostics, CORS origins, model preferences, agent defaults, and any other `openclaw.json` key that isn't driven by a typed CRD field.
