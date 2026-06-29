@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
@@ -192,6 +193,15 @@ func (r *ClawDevicePairingRequestReconciler) Reconcile(ctx context.Context, req 
 			r.Recorder.Eventf(instance, corev1.EventTypeNormal, "DevicePairingApproved",
 				"Device pairing request %q approved via pod %s (requestID: %s)",
 				instance.Name, pod.Name, instance.Spec.RequestID)
+			// Also emit on the parent Claw so the event appears in kubectl describe claw.
+			if clawName := pod.Labels[InstanceLabelKey]; clawName != "" {
+				parentClaw := &clawv1alpha1.Claw{}
+				if err := r.Get(ctx, types.NamespacedName{Name: clawName, Namespace: instance.Namespace}, parentClaw); err == nil {
+					r.Recorder.Eventf(parentClaw, corev1.EventTypeNormal, "DevicePairingApproved",
+						"Device pairing request %q approved via pod %s (requestID: %s)",
+						instance.Name, pod.Name, instance.Spec.RequestID)
+				}
+			}
 		}
 		// Re-fetch to avoid conflict after the Processing status update
 		if fetchErr := r.Get(ctx, req.NamespacedName, instance); fetchErr != nil {
