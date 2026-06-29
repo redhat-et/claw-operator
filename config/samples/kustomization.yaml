@@ -4,4 +4,3 @@ resources:
 - claw_v1alpha1_claw.yaml
 - claw_v1alpha1_claw_openshell.yaml
 - claw_v1alpha1_clawdevicepairingrequest.yaml
-- claw_v1alpha1_openshellgateway.yaml

@@ -795,42 +795,18 @@ const (
 	OpenShellModeMirror OpenShellMode = "mirror"
 )
 
-// OpenShellGatewayRef references an OpenShellGateway used by this Claw.
-type OpenShellGatewayRef struct {
-	// Name is the OpenShellGateway name.
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// Namespace is the OpenShellGateway namespace. When omitted, the Claw
-	// namespace is used.
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
-}
-
 // OpenShellSpec configures OpenClaw's OpenShell sandbox backend integration.
+// +kubebuilder:validation:XValidation:rule="!has(self.enabled) || self.enabled == false || (has(self.gatewayEndpoint) && size(self.gatewayEndpoint) > 0)",message="gatewayEndpoint is required when OpenShell is enabled"
 type OpenShellSpec struct {
 	// Enabled activates the OpenShell sandbox backend for agent sessions.
 	// +optional
 	// +kubebuilder:default=false
 	Enabled bool `json:"enabled,omitempty"`
 
-	// GatewayRef references an operator-managed OpenShellGateway. Prefer this
-	// over gatewayEndpoint so the operator can derive NetworkPolicy selectors.
-	// +optional
-	GatewayRef *OpenShellGatewayRef `json:"gatewayRef,omitempty"`
-
-	// GatewayEndpoint is an explicit in-cluster OpenShell gateway URL. Use this
-	// for gateways not represented by an OpenShellGateway object.
+	// GatewayEndpoint is the explicit in-cluster OpenShell gateway URL.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^https?://`
 	GatewayEndpoint string `json:"gatewayEndpoint,omitempty"`
-
-	// OpenClawImage overrides the OpenClaw gateway/init image when OpenShell is
-	// enabled. Use an image that includes the OpenShell CLI and plugin runtime
-	// dependencies.
-	// +optional
-	// +kubebuilder:validation:MinLength=1
-	OpenClawImage string `json:"openClawImage,omitempty"`
 
 	// SandboxImage is passed to the OpenShell plugin as the sandbox image.
 	// Defaults to the OpenClaw OpenShell sandbox image.

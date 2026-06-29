@@ -20,8 +20,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  - nodes
   - pods
   verbs:
   - get
@@ -47,19 +45,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - agents.x-k8s.io
-  resources:
-  - sandboxes
-  - sandboxes/status
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - apps
   resources:
   - deployments
@@ -71,12 +56,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - authentication.k8s.io
-  resources:
-  - tokenreviews
-  verbs:
-  - create
 - apiGroups:
   - claw.sandbox.redhat.com
   resources:
@@ -93,7 +72,6 @@ rules:
   resources:
   - clawdevicepairingrequests/finalizers
   - claws/finalizers
-  - openshellgateways/finalizers
   verbs:
   - update
 - apiGroups:
@@ -101,7 +79,6 @@ rules:
   resources:
   - clawdevicepairingrequests/status
   - claws/status
-  - openshellgateways/status
   verbs:
   - get
   - patch
@@ -113,16 +90,6 @@ rules:
   verbs:
   - get
   - list
-  - watch
-- apiGroups:
-  - claw.sandbox.redhat.com
-  resources:
-  - openshellgateways
-  verbs:
-  - get
-  - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - monitoring.coreos.com
@@ -151,8 +118,13 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
-  - clusterrolebindings
   - clusterroles
+  verbs:
+  - delete
+  - get
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - rolebindings
   - roles
   verbs:
@@ -182,11 +154,3 @@ rules:
   verbs:
   - create
   - update
-- apiGroups:
-  - security.openshift.io
-  resourceNames:
-  - privileged
-  resources:
-  - securitycontextconstraints
-  verbs:
-  - use

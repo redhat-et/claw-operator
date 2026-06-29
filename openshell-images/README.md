@@ -1,7 +1,7 @@
 # OpenShell Images
 
 This directory contains the image definitions used by the claw-operator
-OpenShell integration.
+OpenShell direct-endpoint integration.
 
 ## Images
 
@@ -55,4 +55,8 @@ INSTALL_BUILD_TOOLS=true \
   ./openshell-images/build-sandbox-image.sh quay.io/<org>/openclaw-openshell-sandbox:build-tools
 ```
 
-Use the pushed sandbox image in `OpenShellGateway.spec.sandboxImage`.
+Use the pushed sandbox image in `Claw.spec.openshell.sandboxImage`.
+
+These images do not deploy or configure an OpenShell gateway. Deploy the
+gateway separately, then point `Claw.spec.openshell.gatewayEndpoint` at its
+in-cluster Service DNS name.

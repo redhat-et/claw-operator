@@ -39,9 +39,6 @@ const gitCredentialsVolumeName = "git-credentials"
 const protectedFilesVolumeName = "protected-files"
 
 func effectiveOpenClawImage(instance *clawv1alpha1.Claw) string {
-	if openShellEnabled(instance) && instance.Spec.OpenShell.OpenClawImage != "" {
-		return instance.Spec.OpenShell.OpenClawImage
-	}
 	if instance.Spec.Image != "" {
 		return instance.Spec.Image
 	}
@@ -52,8 +49,7 @@ func effectiveOpenClawImage(instance *clawv1alpha1.Claw) string {
 }
 
 // configureClawImage sets the OpenClaw container image on the gateway
-// Deployment. spec.openshell.openClawImage takes precedence when OpenShell is
-// enabled; otherwise spec.image takes precedence over spec.version. Affects
+// Deployment. spec.image takes precedence over spec.version. Affects
 // init-volume, init-config (init containers), and gateway (regular container).
 func configureClawImage(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
 	image := effectiveOpenClawImage(instance)
