@@ -218,6 +218,32 @@ func TestBuildChannelConfig(t *testing.T) {
 		assert.Equal(t, "placeholder", config["token"])
 	})
 
+	t.Run("discord token uses env SecretRef when secret is configured", func(t *testing.T) {
+		cred := clawv1alpha1.CredentialSpec{
+			Name:      "dc",
+			Channel:   "discord",
+			SecretRef: []clawv1alpha1.SecretRefEntry{{Name: "discord-secret", Key: "token"}},
+		}
+		config, err := buildChannelConfig(cred)
+		require.NoError(t, err)
+		assert.Equal(t, channelEnvSecretRef("OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN"), config["token"])
+	})
+
+	t.Run("discord SecretRef replacement only touches token key", func(t *testing.T) {
+		cred := clawv1alpha1.CredentialSpec{
+			Name:      "dc",
+			Channel:   "discord",
+			SecretRef: []clawv1alpha1.SecretRefEntry{{Name: "discord-secret", Key: "token"}},
+			ChannelConfig: &runtime.RawExtension{
+				Raw: []byte(`{"statusText":"placeholder"}`),
+			},
+		}
+		config, err := buildChannelConfig(cred)
+		require.NoError(t, err)
+		assert.Equal(t, channelEnvSecretRef("OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN"), config["token"])
+		assert.Equal(t, "placeholder", config["statusText"])
+	})
+
 	t.Run("slack builds base config with both tokens", func(t *testing.T) {
 		cred := clawv1alpha1.CredentialSpec{Name: "sl", Channel: "slack"}
 		config, err := buildChannelConfig(cred)
@@ -225,6 +251,21 @@ func TestBuildChannelConfig(t *testing.T) {
 		assert.Equal(t, true, config["enabled"])
 		assert.Equal(t, "xoxb-placeholder", config["botToken"])
 		assert.Equal(t, "xapp-placeholder", config["appToken"])
+	})
+
+	t.Run("slack tokens use env SecretRefs when secrets are configured", func(t *testing.T) {
+		cred := clawv1alpha1.CredentialSpec{
+			Name:    "sl",
+			Channel: "slack",
+			SecretRef: []clawv1alpha1.SecretRefEntry{
+				{Name: "slack-secret", Key: "bot-token", Role: "botToken"},
+				{Name: "slack-secret", Key: "app-token", Role: "appToken"},
+			},
+		}
+		config, err := buildChannelConfig(cred)
+		require.NoError(t, err)
+		assert.Equal(t, channelEnvSecretRef("OPENCLAW_CHANNEL_SLACK_BOT_TOKEN"), config["botToken"])
+		assert.Equal(t, channelEnvSecretRef("OPENCLAW_CHANNEL_SLACK_APP_TOKEN"), config["appToken"])
 	})
 
 	t.Run("whatsapp builds minimal config with enabled only", func(t *testing.T) {
@@ -677,7 +718,7 @@ func TestChannelCredentialReconciliation(t *testing.T) {
 		tg, ok := channels["telegram"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, true, tg["enabled"])
-		assert.Equal(t, "placeholder", tg["botToken"])
+		assert.Equal(t, channelEnvSecretRef("OPENCLAW_CHANNEL_TELEGRAM_BOT_TOKEN"), tg["botToken"])
 		assert.Equal(t, "open", tg["dmPolicy"], "operator should set open dmPolicy for Telegram")
 		assert.Equal(t, []any{"*"}, tg["allowFrom"], "operator should set wildcard allowFrom for Telegram")
 

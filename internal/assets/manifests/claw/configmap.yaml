@@ -164,6 +164,63 @@ data:
       return merged;
     }
 
+    function readCurrentOperatorManagedChannels(managedChannelsPath) {
+      if (!fs.existsSync(managedChannelsPath)) {
+        return [];
+      }
+      try {
+        const channels = JSON.parse(fs.readFileSync(managedChannelsPath, "utf8"));
+        return Array.isArray(channels) ? channels.filter((channel) => typeof channel === "string") : [];
+      } catch (err) {
+        console.warn("[init-config] current managed channel state is invalid; assuming no operator-managed channels");
+        return [];
+      }
+    }
+
+    function readPreviousOperatorManagedChannels(managedChannelsPath) {
+      if (!fs.existsSync(managedChannelsPath)) {
+        return [];
+      }
+      try {
+        const channels = JSON.parse(fs.readFileSync(managedChannelsPath, "utf8"));
+        return Array.isArray(channels) ? channels.filter((channel) => typeof channel === "string") : [];
+      } catch (err) {
+        console.warn("[init-config] previous managed channel state is invalid; preserving existing channels");
+        return [];
+      }
+    }
+
+    function writeOperatorManagedChannels(managedChannelsPath, channels) {
+      fs.mkdirSync(path.dirname(managedChannelsPath), { recursive: true });
+      fs.writeFileSync(managedChannelsPath, JSON.stringify(channels, null, 2), { mode: 0o600 });
+    }
+
+    function pruneOperatorManagedChannels(config, managedChannels) {
+      if (!config || !config.channels || typeof config.channels !== "object" || Array.isArray(config.channels)) {
+        return config;
+      }
+      if (!Array.isArray(managedChannels) || managedChannels.length === 0) {
+        return config;
+      }
+      const channels = { ...config.channels };
+      const pluginEntries = (config.plugins && typeof config.plugins === "object" && !Array.isArray(config.plugins) &&
+        config.plugins.entries && typeof config.plugins.entries === "object" && !Array.isArray(config.plugins.entries))
+        ? { ...config.plugins.entries }
+        : null;
+      for (const channel of managedChannels) {
+        if (typeof channel === "string") {
+          delete channels[channel];
+          if (pluginEntries) {
+            delete pluginEntries[channel];
+          }
+        }
+      }
+      if (!pluginEntries) {
+        return { ...config, channels };
+      }
+      return { ...config, channels, plugins: { ...config.plugins, entries: pluginEntries } };
+    }
+
     function seedIfMissing(src, dest) {
       if (!fs.existsSync(dest)) {
         const dir = path.dirname(dest);
@@ -354,33 +411,17 @@ data:
     }
 
     // Ensure directories exist
-    for (const sub of ["workspace", ".local", ".cache", ".config/codex"]) {
+    for (const sub of ["workspace", ".local", ".cache", ".config/codex", ".operator"]) {
       fs.mkdirSync(path.join(pvcDir, sub), { recursive: true });
     }
 
     // Merge or overwrite openclaw.json
     const ops = JSON.parse(fs.readFileSync(path.join(configDir, "operator.json"), "utf8"));
-    // Substitute channel token placeholders with real values from CHANNEL_* env vars.
-    // CHANNEL_SECRET_MAP is a JSON object: {"envVarName": {"channel": "discord", "key": "token", "placeholder": "placeholder"}}
-    // The operator builds this map from knownChannels and sets it on the init-config container.
-    if (process.env.CHANNEL_SECRET_MAP && ops.channels) {
-      try {
-        const secretMap = JSON.parse(process.env.CHANNEL_SECRET_MAP);
-        for (const [envName, mapping] of Object.entries(secretMap)) {
-          const envVal = process.env[envName];
-          if (!envVal) continue;
-          const channelConf = ops.channels[mapping.channel];
-          if (!channelConf || typeof channelConf !== "object") continue;
-          if (channelConf[mapping.key] === mapping.placeholder) {
-            channelConf[mapping.key] = envVal;
-          }
-        }
-      } catch (e) {
-        console.warn("[init-config] failed to parse CHANNEL_SECRET_MAP:", e.message);
-      }
-    }
     const seed = JSON.parse(fs.readFileSync(path.join(configDir, "openclaw.json"), "utf8"));
     const pvcPath = path.join(pvcDir, "openclaw.json");
+    const managedChannelsPath = path.join(pvcDir, ".operator", "managed-channels.json");
+    const currentManagedChannels = readCurrentOperatorManagedChannels(path.join(configDir, "operator-managed-channels.json"));
+    const previousManagedChannels = readPreviousOperatorManagedChannels(managedChannelsPath);
     const agentFilesSourceDir = prepareAgentFilesSource();
     let seedConfig = seed;
     const agentFilesConfigPath = agentFilesSourceDir ? path.join(agentFilesSourceDir, "openclaw.json") : "";
@@ -393,6 +434,7 @@ data:
       let base = JSON.parse(fs.readFileSync(pvcPath, "utf8"));
       const merged = deepMerge(base, managedInfrastructureConfig(ops));
       fs.writeFileSync(pvcPath, JSON.stringify(merged, null, 2), { mode: 0o600 });
+      writeOperatorManagedChannels(managedChannelsPath, []);
       console.log("[init-config] preserved user openclaw.json and refreshed gateway infrastructure");
     } else if (mode === "merge" && fs.existsSync(pvcPath)) {
       let base = seed;
@@ -403,7 +445,7 @@ data:
       }
       const savedPrimary = base?.agents?.defaults?.model?.primary;
       const savedFallbacks = base?.agents?.defaults?.model?.fallbacks;
-      const merged = mergeConfigs(base, ops);
+      const merged = mergeConfigs(pruneOperatorManagedChannels(base, previousManagedChannels), ops);
       if (savedPrimary || savedFallbacks) {
         merged.agents = merged.agents || {};
         merged.agents.defaults = merged.agents.defaults || {};
@@ -416,9 +458,11 @@ data:
         }
       }
       fs.writeFileSync(pvcPath, JSON.stringify(merged, null, 2), { mode: 0o600 });
+      writeOperatorManagedChannels(managedChannelsPath, currentManagedChannels);
       console.log("[init-config] merged operator.json into existing openclaw.json");
     } else {
       fs.writeFileSync(pvcPath, JSON.stringify(mergeConfigs(seedConfig, ops), null, 2), { mode: 0o600 });
+      writeOperatorManagedChannels(managedChannelsPath, currentManagedChannels);
       console.log(`[init-config] wrote openclaw.json (mode=${mode}, first_run=${!fs.existsSync(pvcPath)})`);
     }
 
@@ -610,9 +654,13 @@ data:
 
     ## Key constraints (always in effect)
 
-    - All outbound traffic goes through a credential-injecting MITM proxy.
-      Domains not explicitly configured are blocked.
-    - Real credentials never reach this pod. The proxy injects them.
+    - LLM provider, Kubernetes, web search, and proxy-injected MCP traffic goes
+      through a credential-injecting MITM proxy. Domains not explicitly configured
+      are blocked.
+    - LLM/provider/API credentials do not reach this pod. The proxy injects them.
+      Messaging channel tokens are the exception: operator-managed channels use
+      Secret-backed gateway env vars because OpenClaw channel clients need runtime
+      tokens for WebSocket/session authentication.
     - `openclaw config patch` works for user-managed settings (custom plugins,
       agent preferences, UI tweaks). For declarative configuration that
       persists across CR updates, use `spec.config.raw` in the Claw CR.
@@ -687,9 +735,10 @@ data:
 
     - Gateway bind address, port, auth, and update settings are managed by the
       operator. Do not tell the user to change these in `openclaw.json`.
-    - Real credentials are not stored in this gateway container. Network requests go
-      through a credential-injecting proxy that replaces placeholder credentials with
-      real secrets.
+    - LLM/provider/API credentials are not stored in this gateway container. Network
+      requests go through a credential-injecting proxy that replaces placeholder
+      credentials with real secrets. Messaging channel tokens are the exception and
+      may be mounted as Secret-backed gateway env vars for channel runtime auth.
     - Network egress is restricted. If an external service is unreachable, the user
       may need an operator/admin to add the right credential or allowlist entry to
       the Claw custom resource.
@@ -753,9 +802,11 @@ data:
 
     # Proxy Architecture
 
-    All outbound traffic from this pod goes through a credential-injecting MITM proxy
-    via `HTTP_PROXY`/`HTTPS_PROXY` environment variables. The proxy blocks any domain
-    that is not explicitly configured.
+    Most outbound traffic from this pod goes through a credential-injecting MITM
+    proxy via `HTTP_PROXY`/`HTTPS_PROXY` environment variables. The proxy blocks any
+    domain that is not explicitly configured. Messaging channel WebSocket traffic may
+    use direct TCP/443 gateway egress because current OpenClaw channel clients do not
+    proxy all session traffic.
 
     By default, all egress (including in-cluster) goes through the proxy. When
     `spec.network.inClusterBypass` is `true`, in-cluster traffic (`.svc`,
@@ -766,7 +817,9 @@ data:
     LLM provider credentials (API keys, OAuth tokens, GCP service account tokens) are
     injected by the proxy — you never see real secrets. For non-LLM services that need
     network access without credential injection, the proxy can allowlist domains using
-    `type: none` credential entries.
+    `type: none` credential entries. Messaging channel tokens are mounted as
+    Secret-backed gateway env vars for channel runtime auth, so treat channel access
+    as a gateway-runtime secret boundary rather than a proxy-only boundary.
 
     ## Network configuration (`spec.network`)
 
@@ -1084,7 +1137,7 @@ data:
     When a credential in the Claw CR has a `channel:` field (e.g., `channel: telegram`),
     the operator fully manages that channel:
     - Proxy config (domain, credential type, companion routes) is auto-inferred
-    - Channel config is injected into `operator.json` (enabled + placeholder tokens)
+    - Channel config is injected into `operator.json` (enabled + SecretRef-backed tokens)
     - Plugin entries are added to `operator.json`
     - Pod rolls out automatically when channel config changes
 

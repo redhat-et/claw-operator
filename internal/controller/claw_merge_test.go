@@ -63,6 +63,23 @@ type mergeTestResult struct {
 	pvcDir string // temp PVC directory for filesystem assertions
 }
 
+const managedTelegramChannelJSON = `{
+			"channels": {
+				"telegram": {"enabled": true, "botToken": {"source": "env", "provider": "default", "id": "OPENCLAW_CHANNEL_TELEGRAM_BOT_TOKEN"}}
+			},
+			"plugins": {
+				"entries": {
+					"telegram": {"enabled": true}
+				}
+			}
+		}`
+
+const userManagedDiscordChannelJSON = `{
+			"channels": {
+				"discord": {"enabled": true, "token": "user-managed-token"}
+			}
+		}`
+
 func runMergeJS(t *testing.T, setup mergeTestSetup) mergeTestResult {
 	t.Helper()
 
@@ -632,6 +649,135 @@ func TestMergeJS(t *testing.T) {
 		fbSlice := fallbacks.([]any)
 		require.Len(t, fbSlice, 1)
 		assert.Equal(t, "anthropic/claude-sonnet-4-6", fbSlice[0], "user's fallbacks should be preserved on restart")
+	})
+
+	t.Run("operator-managed channels are replaced on restart", func(t *testing.T) {
+		pvcJSON := `{
+			"channels": {
+				"discord": {"enabled": true, "token": {"source": "env", "provider": "default", "id": "OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN"}},
+				"telegram": {"enabled": true, "botToken": {"source": "env", "provider": "default", "id": "OLD_OPENCLAW_CHANNEL_TELEGRAM_BOT_TOKEN"}},
+				"custom": {"enabled": true, "token": "keep"}
+			},
+			"plugins": {
+				"entries": {
+					"discord": {"enabled": true},
+					"telegram": {"enabled": true},
+					"custom": {"enabled": true}
+				}
+			}
+		}`
+
+		result := runMergeJS(t, mergeTestSetup{
+			operatorJSON: managedTelegramChannelJSON,
+			pvcJSON:      pvcJSON,
+			extraConfigs: map[string]string{
+				"operator-managed-channels.json": `["telegram"]`,
+			},
+			pvcFiles: map[string]string{
+				".operator/managed-channels.json": `["discord","telegram"]`,
+			},
+		})
+
+		channels, hasChannels := nestedValue(result.config, "channels")
+		require.True(t, hasChannels)
+		channelsMap := channels.(map[string]any)
+		assert.NotContains(t, channelsMap, "discord", "removed operator-managed channels should not persist")
+		assert.Contains(t, channelsMap, "custom", "user-managed custom channels should be preserved")
+		telegram := channelsMap["telegram"].(map[string]any)
+		assert.Equal(t, map[string]any{"source": "env", "provider": "default", "id": "OPENCLAW_CHANNEL_TELEGRAM_BOT_TOKEN"}, telegram["botToken"])
+		plugins, hasPlugins := nestedValue(result.config, "plugins.entries")
+		require.True(t, hasPlugins)
+		pluginsMap := plugins.(map[string]any)
+		assert.NotContains(t, pluginsMap, "discord", "removed operator-managed channel plugin should not persist")
+		assert.Contains(t, pluginsMap, "telegram")
+		assert.Contains(t, pluginsMap, "custom")
+		managedChannels, err := os.ReadFile(filepath.Join(result.pvcDir, ".operator", "managed-channels.json"))
+		require.NoError(t, err)
+		assert.JSONEq(t, `["telegram"]`, string(managedChannels))
+	})
+
+	t.Run("known user-managed channels are preserved without operator marker", func(t *testing.T) {
+		result := runMergeJS(t, mergeTestSetup{
+			operatorJSON: managedTelegramChannelJSON,
+			pvcJSON:      userManagedDiscordChannelJSON,
+			extraConfigs: map[string]string{
+				"operator-managed-channels.json": `["telegram"]`,
+			},
+		})
+
+		channels, hasChannels := nestedValue(result.config, "channels")
+		require.True(t, hasChannels)
+		channelsMap := channels.(map[string]any)
+		assert.Contains(t, channelsMap, "discord", "known channels without operator ownership should be preserved")
+	})
+
+	t.Run("user-managed channels are not marked operator-managed", func(t *testing.T) {
+		result := runMergeJS(t, mergeTestSetup{
+			operatorJSON: managedTelegramChannelJSON,
+			pvcJSON:      userManagedDiscordChannelJSON,
+			extraConfigs: map[string]string{
+				"operator-managed-channels.json": `["telegram"]`,
+			},
+			extraEnv: map[string]string{
+				"CLAW_CONFIG_MANAGEMENT": "user",
+			},
+		})
+
+		channels, hasChannels := nestedValue(result.config, "channels")
+		require.True(t, hasChannels)
+		assert.Contains(t, channels.(map[string]any), "discord", "user-managed channels should be preserved")
+
+		managedChannels, err := os.ReadFile(filepath.Join(result.pvcDir, ".operator", "managed-channels.json"))
+		require.NoError(t, err)
+		assert.JSONEq(t, `[]`, string(managedChannels))
+	})
+
+	t.Run("raw config channels are not marked operator-managed", func(t *testing.T) {
+		operatorJSON := `{
+			"channels": {
+				"discord": {"enabled": true, "token": "user-managed-token"}
+			}
+		}`
+		pvcJSON := `{
+			"channels": {
+				"discord": {"enabled": true, "token": "runtime-user-managed-token"}
+			}
+		}`
+
+		result := runMergeJS(t, mergeTestSetup{operatorJSON: operatorJSON, pvcJSON: pvcJSON})
+
+		channels, hasChannels := nestedValue(result.config, "channels")
+		require.True(t, hasChannels)
+		channelsMap := channels.(map[string]any)
+		assert.Contains(t, channelsMap, "discord")
+		managedChannels, err := os.ReadFile(filepath.Join(result.pvcDir, ".operator", "managed-channels.json"))
+		require.NoError(t, err)
+		assert.JSONEq(t, `[]`, string(managedChannels))
+	})
+
+	t.Run("empty managed channels marker clears stale operator ownership", func(t *testing.T) {
+		operatorJSON := `{}`
+		pvcJSON := `{
+			"channels": {
+				"discord": {"enabled": true, "token": {"source": "env", "provider": "default", "id": "OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN"}}
+			}
+		}`
+
+		result := runMergeJS(t, mergeTestSetup{
+			operatorJSON: operatorJSON,
+			pvcJSON:      pvcJSON,
+			pvcFiles: map[string]string{
+				".operator/managed-channels.json": `["discord"]`,
+			},
+		})
+
+		channels, hasChannels := nestedValue(result.config, "channels")
+		if hasChannels {
+			assert.NotContains(t, channels.(map[string]any), "discord", "previously operator-managed channel should be removed once")
+		}
+		managedChannels, err := os.ReadFile(filepath.Join(result.pvcDir, ".operator", "managed-channels.json"))
+		require.NoError(t, err)
+		assert.JSONEq(t, `[]`, string(managedChannels))
 	})
 
 	t.Run("fallbacks not preserved in overwrite mode", func(t *testing.T) {
