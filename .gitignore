@@ -44,3 +44,6 @@ bundle/
 catalog/
 
 .claude/settings.local.json
+
+# Environment files
+.env*
