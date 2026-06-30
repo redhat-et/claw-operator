@@ -69,9 +69,9 @@ func testClawWithPlugins(plugins []string) *clawv1alpha1.Claw {
 		ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
 		Spec: clawv1alpha1.ClawSpec{
 			Plugins: plugins,
-			// Memory off so these plugin tests stay focused on spec.plugins +
-			// provider-plugin logic. The default-on memory stack is covered by
-			// the memory-stack tests.
+			// The memory stack is opt-in (off by default); pin it off so these
+			// plugin tests stay focused on spec.plugins + provider-plugin logic.
+			// The enabled memory stack is covered by the memory-stack tests.
 			Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 		},
 	}
@@ -650,8 +650,9 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/matrix"}
-		// Memory off: this test is focused on spec.plugins wiring; the
-		// default-on memory stack is covered by the memory-stack tests.
+		// Memory is opt-in (off by default); pinned off so this test stays
+		// focused on spec.plugins wiring. The enabled memory stack is covered
+		// by the memory-stack tests.
 		instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
@@ -725,8 +726,9 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/matrix", "@openclaw/diagnostics-otel"}
-		// Memory off: this test is focused on spec.plugins wiring; the
-		// default-on memory stack is covered by the memory-stack tests.
+		// Memory is opt-in (off by default); pinned off so this test stays
+		// focused on spec.plugins wiring. The enabled memory stack is covered
+		// by the memory-stack tests.
 		instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 

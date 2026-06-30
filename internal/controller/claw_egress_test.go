@@ -816,8 +816,9 @@ func createClawInstanceWithMcpServers(t *testing.T, ctx context.Context, name, n
 			Credentials: testCredentials(),
 			McpServers:  mcpServers,
 			Network:     net,
-			// Memory off so egress envtest suites are not perturbed by the
-			// default-on memory stack. The default-on path is covered separately.
+			// The memory stack is opt-in (off by default); pin it off here so
+			// these egress suites stay focused on egress behavior regardless of
+			// any future default change. The enabled path is covered separately.
 			Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 		},
 	}
