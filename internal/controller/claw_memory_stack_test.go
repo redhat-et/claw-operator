@@ -320,6 +320,27 @@ func TestSetMemoryStackCondition(t *testing.T) {
 		setMemoryStackCondition(instance)
 		assert.Contains(t, cond(instance).Message, "lossless-claw")
 	})
+	t.Run("user-owned memorySearch does not claim vector recall", func(t *testing.T) {
+		// An embedding-capable credential is present, but the user disabled
+		// memorySearch in spec.config.raw, so the operator backs off. The
+		// condition must not assert "with vector recall".
+		instance := &clawv1alpha1.Claw{Spec: clawv1alpha1.ClawSpec{
+			Credentials: openaiCreds,
+			Memory:      &clawv1alpha1.MemorySpec{Enabled: ptr.To(true)},
+			Config: &clawv1alpha1.ConfigSpec{
+				Raw: &clawv1alpha1.RawConfig{
+					RawExtension: runtime.RawExtension{Raw: []byte(`{"agents":{"defaults":{"memorySearch":{"enabled":false}}}}`)},
+				},
+			},
+		}}
+		setMemoryStackCondition(instance)
+		c := cond(instance)
+		require.NotNil(t, c)
+		assert.Equal(t, metav1.ConditionTrue, c.Status)
+		assert.Equal(t, clawv1alpha1.ConditionReasonMemoryStackEnabled, c.Reason)
+		assert.NotContains(t, c.Message, "with vector recall")
+		assert.Contains(t, c.Message, "spec.config.raw")
+	})
 }
 
 func TestInjectMemoryWorkspaceFiles(t *testing.T) {

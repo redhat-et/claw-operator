@@ -98,6 +98,15 @@ func userHasMemoryStackConfig(config map[string]any) bool {
 	return false
 }
 
+// userConfiguredMemorySearch reports whether the user set
+// agents.defaults.memorySearch in spec.config.raw. When they have, the operator
+// backs off and their memorySearch config governs vector recall, so neither the
+// stack injection nor the status condition should manage or claim it.
+func userConfiguredMemorySearch(instance *clawv1alpha1.Claw) bool {
+	rawCfg, _ := parseUserRawConfig(instance)
+	return userHasMemorySearchConfig(rawCfg)
+}
+
 // injectMemoryStack writes the default memory/context stack into operator.json:
 // native layers (memory-core dreaming, memory-wiki, and vector recall when an
 // embedding credential exists) are seeded whenever memory is enabled. The
@@ -182,6 +191,16 @@ func setMemoryStackCondition(instance *clawv1alpha1.Claw) {
 		} else {
 			losslessNote = "lossless-claw context engine active"
 		}
+	}
+
+	// When the user owns memorySearch via spec.config.raw the operator does not
+	// manage vector recall, so the condition must not assert it is active — the
+	// effective state is whatever the user configured.
+	if userConfiguredMemorySearch(instance) {
+		setCondition(instance, clawv1alpha1.ConditionTypeMemoryStack, metav1.ConditionTrue,
+			clawv1alpha1.ConditionReasonMemoryStackEnabled,
+			"Memory stack enabled; vector recall follows your spec.config.raw memorySearch setting ("+losslessNote+")")
+		return
 	}
 
 	if _, _, ok := firstEmbeddingProvider(instance); ok {
