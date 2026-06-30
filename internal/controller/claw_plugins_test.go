@@ -69,8 +69,30 @@ func testClawWithPlugins(plugins []string) *clawv1alpha1.Claw {
 		ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
 		Spec: clawv1alpha1.ClawSpec{
 			Plugins: plugins,
+			// The memory stack is opt-in (off by default); pin it off so these
+			// plugin tests stay focused on spec.plugins + provider-plugin logic.
+			// The enabled memory stack is covered by the memory-stack tests.
+			Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 		},
 	}
+}
+
+// --- pluginPackageName tests ---
+
+func TestPluginPackageName(t *testing.T) {
+	t.Run("bare scoped package without version is unchanged", func(t *testing.T) {
+		assert.Equal(t, "@openclaw/foo", pluginPackageName("@openclaw/foo"))
+	})
+	t.Run("bare scoped package strips version", func(t *testing.T) {
+		assert.Equal(t, "@openclaw/foo", pluginPackageName("@openclaw/foo@1.2.3"))
+	})
+	t.Run("npm scoped package without version keeps scheme, not truncated to npm:", func(t *testing.T) {
+		assert.Equal(t, "npm:@martian-engineering/lossless-claw",
+			pluginPackageName("npm:@martian-engineering/lossless-claw"))
+	})
+	t.Run("npm scoped package strips version, keeps scheme", func(t *testing.T) {
+		assert.Equal(t, "npm:@scope/pkg", pluginPackageName("npm:@scope/pkg@1.2.3"))
+	})
 }
 
 // --- pluginsEnabled tests ---
@@ -175,6 +197,23 @@ func TestGeneratePluginInstallScript(t *testing.T) {
 		assert.Contains(t, script, `target="$EXT/$dir"`)
 		assert.Contains(t, script, `mkdir -p "$EXT"`)
 		assert.Contains(t, script, `ls "$EXT"`)
+	})
+
+	t.Run("should install npm-prefixed plugin from npm (no clawhub source)", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"npm:@martian-engineering/lossless-claw"})
+		assert.Contains(t, script, "openclaw plugins install '@martian-engineering/lossless-claw'")
+		assert.NotContains(t, script, "clawhub:")
+	})
+
+	t.Run("should keep bare plugin names on clawhub (backward compatible)", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"@openclaw/matrix"})
+		assert.Contains(t, script, "openclaw plugins install clawhub:'@openclaw/matrix'")
+	})
+
+	t.Run("should mix npm and clawhub sources", func(t *testing.T) {
+		script := generatePluginInstallScript([]string{"npm:@martian-engineering/lossless-claw", "@openclaw/matrix"})
+		assert.Contains(t, script, "openclaw plugins install '@martian-engineering/lossless-claw'")
+		assert.Contains(t, script, "openclaw plugins install clawhub:'@openclaw/matrix'")
 	})
 }
 
@@ -399,6 +438,7 @@ func TestConfigurePluginsInitContainer(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "gateway container image not found")
 	})
+
 }
 
 // --- effectivePlugins and requiredProviderPlugins tests ---
@@ -475,6 +515,7 @@ func TestEffectivePlugins(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			Spec: clawv1alpha1.ClawSpec{
 				Plugins: []string{"@openclaw/matrix"},
+				Memory:  &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 				Credentials: []clawv1alpha1.CredentialSpec{
 					{Name: "g", Type: clawv1alpha1.CredentialTypeAPIKey, Provider: "google"},
 				},
@@ -487,6 +528,7 @@ func TestEffectivePlugins(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			Spec: clawv1alpha1.ClawSpec{
 				Plugins: []string{"@openclaw/matrix"},
+				Memory:  &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 				Credentials: []clawv1alpha1.CredentialSpec{
 					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
 						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
@@ -503,6 +545,7 @@ func TestEffectivePlugins(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			Spec: clawv1alpha1.ClawSpec{
 				Plugins: []string{"@openclaw/anthropic-vertex-provider"},
+				Memory:  &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 				Credentials: []clawv1alpha1.CredentialSpec{
 					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
 						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
@@ -516,6 +559,7 @@ func TestEffectivePlugins(t *testing.T) {
 	t.Run("returns implicit plugins when spec.plugins is empty", func(t *testing.T) {
 		instance := &clawv1alpha1.Claw{
 			Spec: clawv1alpha1.ClawSpec{
+				Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)},
 				Credentials: []clawv1alpha1.CredentialSpec{
 					{Name: "vertex", Type: clawv1alpha1.CredentialTypeGCP, Provider: "anthropic",
 						GCP: &clawv1alpha1.GCPConfig{Project: "p", Location: "us-east5"}},
@@ -606,6 +650,10 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/matrix"}
+		// Memory is opt-in (off by default); pinned off so this test stays
+		// focused on spec.plugins wiring. The enabled memory stack is covered
+		// by the memory-stack tests.
+		instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
 		reconciler := createClawReconciler()
@@ -678,6 +726,10 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Namespace = namespace
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/matrix", "@openclaw/diagnostics-otel"}
+		// Memory is opt-in (off by default); pinned off so this test stays
+		// focused on spec.plugins wiring. The enabled memory stack is covered
+		// by the memory-stack tests.
+		instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 		require.NoError(t, k8sClient.Create(ctx, instance))
 
 		reconciler := createClawReconciler()
@@ -714,6 +766,9 @@ func TestPluginsIntegration(t *testing.T) {
 		instance.Spec.Credentials = testCredentials()
 		instance.Spec.Plugins = []string{"@openclaw/diagnostics-otel"}
 		instance.Spec.Traces = &clawv1alpha1.TracesSpec{Enabled: true, Endpoint: "http://otel-collector.default.svc:4318"}
+		// Memory off: this test is focused on spec.plugins wiring; the
+		// memory stack is covered by the memory-stack tests.
+		instance.Spec.Memory = &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}
 		smDisabled := false
 		instance.Spec.Metrics = &clawv1alpha1.MetricsSpec{
 			Enabled:        true,

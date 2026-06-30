@@ -44,3 +44,5 @@ bundle/
 catalog/
 
 .claude/settings.local.json
+# SDD workflow scratch (not committed to the repo)
+.superpowers/
