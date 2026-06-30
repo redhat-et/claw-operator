@@ -186,6 +186,35 @@ func TestInjectMemoryStack(t *testing.T) {
 		assert.False(t, hasSlots, "no contextEngine slot since lossless is off")
 	})
 
+	t.Run("lossless requested but plugin install disabled omits contextEngine slot", func(t *testing.T) {
+		config := map[string]any{}
+		instance := &clawv1alpha1.Claw{Spec: clawv1alpha1.ClawSpec{
+			Memory:       &clawv1alpha1.MemorySpec{Enabled: ptr.To(true), Lossless: ptr.To(true)},
+			Restrictions: &clawv1alpha1.RestrictionsSpec{PluginInstallation: ptr.To(false)},
+		}}
+		injectMemoryStack(config, instance)
+		entries := memEntries(config)
+		assert.Equal(t, true, entries["memory-wiki"].(map[string]any)["enabled"], "native layers still seed")
+		_, hasLossless := entries["lossless-claw"]
+		assert.False(t, hasLossless, "no lossless-claw entry when the plugin won't be installed")
+		_, hasSlots := config["plugins"].(map[string]any)["slots"]
+		assert.False(t, hasSlots, "no contextEngine slot pointing at an uninstalled plugin")
+	})
+
+	t.Run("skips when user configured a native layer entry", func(t *testing.T) {
+		config := map[string]any{
+			"plugins": map[string]any{"entries": map[string]any{"memory-wiki": map[string]any{"enabled": false}}},
+		}
+		instance := &clawv1alpha1.Claw{Spec: clawv1alpha1.ClawSpec{
+			Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(true)},
+		}}
+		injectMemoryStack(config, instance)
+		entries := config["plugins"].(map[string]any)["entries"].(map[string]any)
+		assert.Equal(t, false, entries["memory-wiki"].(map[string]any)["enabled"], "user value preserved")
+		_, hasCore := entries["memory-core"]
+		assert.False(t, hasCore, "no operator entries injected over a user override")
+	})
+
 	t.Run("skips when user already configured memory keys", func(t *testing.T) {
 		config := map[string]any{
 			"plugins": map[string]any{"slots": map[string]any{"contextEngine": "custom-engine"}},

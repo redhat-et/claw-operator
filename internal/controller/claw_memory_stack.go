@@ -69,7 +69,8 @@ func memoryStackPlugins(instance *clawv1alpha1.Claw) []string {
 // userHasMemoryStackConfig reports whether the merged config already carries
 // user-set plugin-level memory configuration. If so, the operator does not
 // inject the default stack (the user owns that config). It treats a user-set
-// plugins.slots.contextEngine or plugins.entries.lossless-claw as an override.
+// plugins.slots.contextEngine, or any of the plugins.entries the stack writes
+// (lossless-claw, memory-core, memory-wiki), as an override.
 // memorySearch is intentionally NOT checked here: injectMemorySearch always
 // sets memorySearch.provider or memorySearch.enabled, so checking it would
 // cause the stack to skip on every normal operator-managed reconcile.
@@ -88,8 +89,10 @@ func userHasMemoryStackConfig(config map[string]any) bool {
 		}
 	}
 	if entries, ok := plugins["entries"].(map[string]any); ok {
-		if _, ok := entries["lossless-claw"]; ok {
-			return true
+		for _, name := range []string{"lossless-claw", "memory-core", "memory-wiki"} {
+			if _, ok := entries[name]; ok {
+				return true
+			}
 		}
 	}
 	return false
@@ -99,8 +102,9 @@ func userHasMemoryStackConfig(config map[string]any) bool {
 // native layers (memory-core dreaming, memory-wiki, and vector recall when an
 // embedding credential exists) are seeded whenever memory is enabled. The
 // lossless-claw context-engine slot and entry are added only when lossless is
-// explicitly enabled. Skipped entirely when the stack is off or the user owns
-// memory config.
+// active (explicitly enabled AND plugin installation is allowed), so
+// operator.json never selects a context engine that effectivePlugins won't
+// install. Skipped entirely when the stack is off or the user owns memory config.
 func injectMemoryStack(config map[string]any, instance *clawv1alpha1.Claw) {
 	if !memoryStackEnabled(instance) || userHasMemoryStackConfig(config) {
 		return
@@ -139,7 +143,7 @@ func injectMemoryStack(config map[string]any, instance *clawv1alpha1.Claw) {
 	render["createBacklinks"] = true
 	render["createDashboards"] = true
 
-	if losslessEnabled(instance) {
+	if losslessActive(instance) {
 		setNestedValue(config, "lossless-claw", "plugins", "slots", "contextEngine")
 		lossless := ensureNestedMap(entries, "lossless-claw")
 		lossless["enabled"] = true
