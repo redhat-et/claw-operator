@@ -394,21 +394,21 @@ func filterInCluster(targets []egressTarget) []egressTarget {
 }
 
 // injectChannelGatewayEgress appends a port-443 egress rule to {instance}-egress
-// when any credential declares a channel. Channel plugins (Discord, Slack, etc.)
-// open WebSocket connections that bypass HTTP_PROXY, so the gateway pod needs
-// direct outbound access on port 443.
+// when a credential declares a channel that still needs direct gateway session
+// traffic. Channels with explicit OpenClaw proxy config stay on the proxy path.
 func injectChannelGatewayEgress(
 	objects []*unstructured.Unstructured,
 	instance *clawv1alpha1.Claw,
 ) error {
-	hasChannel := false
+	needsGateway443 := false
 	for _, cred := range instance.Spec.Credentials {
-		if cred.Channel != "" {
-			hasChannel = true
+		defaults, ok := knownChannels[cred.Channel]
+		if ok && defaults.Gateway443 {
+			needsGateway443 = true
 			break
 		}
 	}
-	if !hasChannel {
+	if !needsGateway443 {
 		return nil
 	}
 

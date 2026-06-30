@@ -837,7 +837,7 @@ func TestInjectChannelGatewayEgress(t *testing.T) {
 		assert.Len(t, egress, 1, "should not add any rules")
 	})
 
-	t.Run("discord channel adds port 443 rule", func(t *testing.T) {
+	t.Run("discord channel stays on the proxy path", func(t *testing.T) {
 		np := makeNP()
 		instance := &clawv1alpha1.Claw{
 			ObjectMeta: metav1.ObjectMeta{Name: "inst"},
@@ -851,16 +851,42 @@ func TestInjectChannelGatewayEgress(t *testing.T) {
 		require.NoError(t, injectChannelGatewayEgress([]*unstructured.Unstructured{np}, instance))
 
 		egress, _, _ := unstructured.NestedSlice(np.Object, "spec", "egress")
-		require.Len(t, egress, 2, "should append one rule")
-
-		rule := egress[1].(map[string]any)
-		ports := rule["ports"].([]any)
-		assert.Len(t, ports, 1)
-		assert.Equal(t, int64(443), ports[0].(map[string]any)["port"])
-		assert.Nil(t, rule["to"], "rule should have no 'to' selector")
+		assert.Len(t, egress, 1, "discord should use channels.discord.proxy instead of direct egress")
 	})
 
-	t.Run("multiple channels adds single port 443 rule", func(t *testing.T) {
+	t.Run("telegram channel does not add port 443 rule", func(t *testing.T) {
+		np := makeNP()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: "inst"},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{Name: "tg", Channel: "telegram"},
+				},
+			},
+		}
+		require.NoError(t, injectChannelGatewayEgress([]*unstructured.Unstructured{np}, instance))
+
+		egress, _, _ := unstructured.NestedSlice(np.Object, "spec", "egress")
+		assert.Len(t, egress, 1, "telegram should stay on the proxy path")
+	})
+
+	t.Run("whatsapp channel adds port 443 rule", func(t *testing.T) {
+		np := makeNP()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: "inst"},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{Name: "wa", Channel: "whatsapp"},
+				},
+			},
+		}
+		require.NoError(t, injectChannelGatewayEgress([]*unstructured.Unstructured{np}, instance))
+
+		egress, _, _ := unstructured.NestedSlice(np.Object, "spec", "egress")
+		assert.Len(t, egress, 2, "whatsapp should get direct session egress")
+	})
+
+	t.Run("multiple proxied channels do not add port 443 rule", func(t *testing.T) {
 		np := makeNP()
 		instance := &clawv1alpha1.Claw{
 			ObjectMeta: metav1.ObjectMeta{Name: "inst"},
@@ -874,7 +900,7 @@ func TestInjectChannelGatewayEgress(t *testing.T) {
 		require.NoError(t, injectChannelGatewayEgress([]*unstructured.Unstructured{np}, instance))
 
 		egress, _, _ := unstructured.NestedSlice(np.Object, "spec", "egress")
-		assert.Len(t, egress, 2, "should append exactly one rule even with multiple channels")
+		assert.Len(t, egress, 1, "discord and telegram should stay on the proxy path")
 	})
 }
 
@@ -1230,7 +1256,7 @@ func TestEgressIntegrationExternalAndAdditional(t *testing.T) {
 }
 
 func TestEgressIntegrationChannels(t *testing.T) {
-	t.Run("channel credential adds port 443 egress rule to gateway NP", func(t *testing.T) {
+	t.Run("discord channel credential does not add port 443 egress rule to gateway NP", func(t *testing.T) {
 		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
 		ctx := context.Background()
 
@@ -1278,7 +1304,7 @@ func TestEgressIntegrationChannels(t *testing.T) {
 				}
 			}
 		}
-		assert.True(t, found443, "gateway NP should have port 443 egress rule for channel companion domains")
+		assert.False(t, found443, "discord should use channels.discord.proxy instead of broad gateway 443 egress")
 	})
 
 	t.Run("no channel credential does not add port 443 to gateway NP", func(t *testing.T) {

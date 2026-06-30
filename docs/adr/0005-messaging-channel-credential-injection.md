@@ -7,14 +7,14 @@
 
 Messaging channels (Telegram, Discord, Slack) use API tokens that OpenClaw manages itself — stored in `openclaw.json` and included in outgoing requests. The proxy only allowlists their domains (`type: none`) but does not manage the credentials, breaking the security model where real secrets stay on the proxy pod and never reach the gateway pod.
 
-This design extends the proxy to intercept and replace placeholder credentials with real secrets for messaging channel traffic, bringing messaging channels into the same security posture as LLM provider credentials.
+This design extends the proxy to intercept and replace placeholder credentials with real secrets for messaging channel HTTP traffic. Channel WebSocket/session authentication is a current exception: OpenClaw channel clients need runtime tokens, so operator-managed channels use OpenClaw SecretRef config backed by gateway env vars until channel session auth can move behind the proxy.
 
 **Constraint:** Modifying OpenClaw upstream is not an option. All changes must be within the claw-operator and its proxy.
 
 ## Design Principles
 
 1. **No upstream changes** — OpenClaw is treated as a black box.
-2. **Defense in depth** — Real secrets never reach the gateway pod. The proxy strips client-supplied credentials and injects real ones.
+2. **Defense in depth** — Prefer proxy injection so real secrets do not reach the gateway pod. Channel WebSocket/session auth is the exception and uses Secret-backed gateway env vars.
 3. **Fail closed** — If credential injection fails, the request is rejected (502), not forwarded with a placeholder.
 4. **Backward compatible** — Existing `type: none` passthrough continues to work. Credential injection is opt-in via credential type configuration.
 5. **Minimal proxy complexity** — Prefer targeted, well-tested changes over architectural overhauls.
@@ -42,7 +42,7 @@ Gateway Pod                    Proxy Pod                     Upstream
 └──────────────┘              └──────────────┘
 ```
 
-### After (Secret on Proxy Pod Only)
+### After (HTTP calls through proxy; session tokens on gateway)
 
 ```
 Gateway Pod                    Proxy Pod                     Upstream
@@ -50,16 +50,16 @@ Gateway Pod                    Proxy Pod                     Upstream
 │ OpenClaw     │──CONNECT────▶│ MITM Proxy   │──────────────▶ api.telegram.org
 │              │  /bot<PLCH>/ │              │  /bot<REAL>/    /bot<REAL_TOKEN>/...
 │ botToken:    │  sendMessage │ path_token   │  sendMessage
-│  <PLACEHOLDER│              │ (replace)    │
+│  SecretRef   │              │ (replace)    │
 │              │              │              │
 └──────────────┘              └──────────────┘
 ```
 
-**Telegram:** OpenClaw sends `/bot<PLACEHOLDER>/sendMessage`. The proxy finds the `/bot` prefix, strips the existing token segment, and inserts the real token.
+**Telegram:** OpenClaw resolves the configured SecretRef at runtime. HTTP bot API calls can still be handled by the proxy path-token route.
 
-**Discord:** OpenClaw sends `Authorization: Bot <PLACEHOLDER>`. The proxy strips the header and injects the real token via the `apiKey` injector with `Bot ` value prefix.
+**Discord:** REST API calls can use proxy header injection, but gateway WebSocket session auth requires the token in the OpenClaw channel runtime today.
 
-**Slack:** OpenClaw sends `Authorization: Bearer xoxb-placeholder`. The proxy strips the header and injects the real token via the `bearer` injector. Same for `xapp-placeholder` on Socket Mode auth calls.
+**Slack:** HTTP API calls can use proxy bearer injection, but Socket Mode/session auth requires the bot/app tokens in the OpenClaw channel runtime today.
 
 ## Core Concepts
 

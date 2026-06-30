@@ -71,9 +71,10 @@ const (
 	DefaultOpenClawVersion = "2026.6.10"
 
 	// OpenClaw JSON config keys shared across enrichment functions
-	configKeyGateway   = "gateway"
-	configKeyControlUI = "controlUi"
-	operatorJSONKey    = "operator.json"
+	configKeyGateway           = "gateway"
+	configKeyControlUI         = "controlUi"
+	operatorJSONKey            = "operator.json"
+	operatorManagedChannelsKey = "operator-managed-channels.json"
 
 	// Gateway networking
 	gatewayPort              = 18789
@@ -616,6 +617,11 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("failed to stamp MCP secret version annotations: %w", err)
 	}
 
+	// Stamp channel Secret versions on gateway deployment for rollout
+	if err := r.stampChannelSecretVersionAnnotation(ctx, objects, instance); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to stamp channel secret version annotations: %w", err)
+	}
+
 	// Stamp persona ConfigMap hash to trigger rollout on persona file changes
 	if err := stampPersonaConfigHash(objects, instance, personaData); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to stamp persona config hash: %w", err)
@@ -841,7 +847,23 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	if err := unstructured.SetNestedField(cmObj.Object, string(updatedJSON), "data", operatorJSONKey); err != nil {
 		return fmt.Errorf("failed to write enriched operator.json back to ConfigMap: %w", err)
 	}
+	managedChannelsJSON, err := json.Marshal(managedChannelNames(instance))
+	if err != nil {
+		return fmt.Errorf("failed to marshal operator-managed channels: %w", err)
+	}
+	if err := unstructured.SetNestedField(cmObj.Object, string(managedChannelsJSON), "data", operatorManagedChannelsKey); err != nil {
+		return fmt.Errorf("failed to write operator-managed channels back to ConfigMap: %w", err)
+	}
 
+	return r.enrichFilesAndNetworkPolicy(ctx, objects, instance, resolvedCreds)
+}
+
+func (r *ClawResourceReconciler) enrichFilesAndNetworkPolicy(
+	ctx context.Context,
+	objects []*unstructured.Unstructured,
+	instance *clawv1alpha1.Claw,
+	resolvedCreds []resolvedCredential,
+) error {
 	if err := injectWorkspaceFiles(objects, instance); err != nil {
 		return fmt.Errorf("failed to inject workspace files: %w", err)
 	}

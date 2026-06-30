@@ -20,7 +20,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -39,15 +38,17 @@ import (
 const gitCredentialsVolumeName = "git-credentials"
 const protectedFilesVolumeName = "protected-files"
 
-// configureClawImage overrides the OpenClaw container image tag on the gateway
-// Deployment when spec.version is set. Affects init-volume, init-config (init
-// containers) and gateway (regular container).
+// configureClawImage overrides the OpenClaw container image on the gateway
+// Deployment. spec.image can override a single Claw and spec.version selects
+// the tag under OpenClawImageBase.
 func configureClawImage(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
-	if instance.Spec.Version == "" {
+	image := strings.TrimSpace(instance.Spec.Image)
+	if image == "" && instance.Spec.Version == "" {
 		return nil
 	}
-
-	image := OpenClawImageBase + ":" + instance.Spec.Version
+	if image == "" {
+		image = OpenClawImageBase + ":" + instance.Spec.Version
+	}
 	gatewayName := getClawDeploymentName(instance.Name)
 	clawContainers := map[string]bool{
 		ClawInitVolumeContainerName: true,
@@ -1072,18 +1073,67 @@ func configureGatewayForMcpServers(objects []*unstructured.Unstructured, instanc
 	return fmt.Errorf("claw deployment not found in manifests")
 }
 
-// configureGatewayForChannels mounts channel secret env vars on the init-config
-// container so merge.js can substitute placeholders in operator.json with real values.
+// configureGatewayForChannels mounts channel secret env vars on the gateway
+// container so OpenClaw can resolve channel SecretRefs at runtime.
 func configureGatewayForChannels(objects []*unstructured.Unstructured, instance *clawv1alpha1.Claw) error {
-	type secretMapEntry struct {
-		Channel     string `json:"channel"`
-		Key         string `json:"key"`
-		Placeholder string `json:"placeholder"`
+	channelEnv := collectChannelEnvFrom(instance)
+	desired := make([]clawv1alpha1.McpEnvFromSecret, 0, len(channelEnv))
+	for _, entry := range channelEnv {
+		desired = append(desired, entry.Env)
 	}
 
-	var envVarsToAdd []map[string]any
-	secretMap := map[string]secretMapEntry{}
+	if len(desired) == 0 {
+		return nil
+	}
 
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+		if err != nil {
+			return fmt.Errorf("failed to get containers from claw deployment: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("containers field not found in claw deployment")
+		}
+
+		for i, c := range containers {
+			container, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(container, "name")
+			if name != ClawGatewayContainerName {
+				continue
+			}
+
+			envVars, _, _ := unstructured.NestedSlice(container, "env")
+			envVars, err = mergeChannelEnvFromIntoSlice(envVars, desired)
+			if err != nil {
+				return err
+			}
+
+			if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
+				return fmt.Errorf("failed to set channel env vars on gateway container: %w", err)
+			}
+			containers[i] = container
+			return unstructured.SetNestedSlice(obj.Object, containers, "spec", "template", "spec", "containers")
+		}
+		return fmt.Errorf("container %q not found in claw deployment", ClawGatewayContainerName)
+	}
+	return fmt.Errorf("claw deployment not found in manifests")
+}
+
+type channelEnvFromSecret struct {
+	Channel string
+	Env     clawv1alpha1.McpEnvFromSecret
+}
+
+func collectChannelEnvFrom(instance *clawv1alpha1.Claw) []channelEnvFromSecret {
+	var entries []channelEnvFromSecret
 	for _, cred := range instance.Spec.Credentials {
 		if cred.Channel == "" {
 			continue
@@ -1106,78 +1156,39 @@ func configureGatewayForChannels(objects []*unstructured.Unstructured, instance 
 			if ref == nil {
 				continue
 			}
-			envVarsToAdd = append(envVarsToAdd, map[string]any{
-				"name": sr.GatewayEnv,
-				"valueFrom": map[string]any{
-					"secretKeyRef": map[string]any{
-						"name": ref.Name,
-						"key":  ref.Key,
-					},
+			entries = append(entries, channelEnvFromSecret{
+				Channel: cred.Channel,
+				Env: clawv1alpha1.McpEnvFromSecret{
+					Name:      sr.GatewayEnv,
+					SecretRef: *ref,
 				},
 			})
-			for configKey, configVal := range defaults.ConfigBase {
-				if placeholder, ok := configVal.(string); ok && placeholder == sr.Placeholder {
-					secretMap[sr.GatewayEnv] = secretMapEntry{
-						Channel:     cred.Channel,
-						Key:         configKey,
-						Placeholder: placeholder,
-					}
-				}
-			}
 		}
 	}
+	return entries
+}
 
-	if len(envVarsToAdd) == 0 {
-		return nil
-	}
-
-	secretMapJSON, err := json.Marshal(secretMap)
-	if err != nil {
-		return fmt.Errorf("failed to marshal channel secret map: %w", err)
-	}
-	envVarsToAdd = append(envVarsToAdd, map[string]any{
-		"name":  "CHANNEL_SECRET_MAP",
-		"value": string(secretMapJSON),
-	})
-
-	gatewayName := getClawDeploymentName(instance.Name)
-	for _, obj := range objects {
-		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
-			continue
-		}
-
-		initContainers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "initContainers")
-		if err != nil {
-			return fmt.Errorf("failed to get init containers from claw deployment: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("initContainers field not found in claw deployment")
-		}
-
-		for i, ic := range initContainers {
-			container, ok := ic.(map[string]any)
+func mergeChannelEnvFromIntoSlice(existing []any, desired []clawv1alpha1.McpEnvFromSecret) ([]any, error) {
+desiredLoop:
+	for _, ef := range desired {
+		for _, envVar := range existing {
+			em, ok := envVar.(map[string]any)
 			if !ok {
 				continue
 			}
-			name, _, _ := unstructured.NestedString(container, "name")
-			if name != ClawInitConfigContainerName {
+			name, _, _ := unstructured.NestedString(em, "name")
+			if name != ef.Name {
 				continue
 			}
-
-			envVars, _, _ := unstructured.NestedSlice(container, "env")
-			for _, newEnv := range envVarsToAdd {
-				envVars = append(envVars, newEnv)
+			existingSecretName, _, _ := unstructured.NestedString(em, "valueFrom", "secretKeyRef", "name")
+			existingSecretKey, _, _ := unstructured.NestedString(em, "valueFrom", "secretKeyRef", "key")
+			if existingSecretName == ef.SecretRef.Name && existingSecretKey == ef.SecretRef.Key {
+				continue desiredLoop
 			}
-
-			if err := unstructured.SetNestedSlice(container, envVars, "env"); err != nil {
-				return fmt.Errorf("failed to set channel env vars on init-config container: %w", err)
-			}
-			initContainers[i] = container
-			return unstructured.SetNestedSlice(obj.Object, initContainers, "spec", "template", "spec", "initContainers")
+			return nil, fmt.Errorf("channel env var %q conflicts with existing gateway env var", ef.Name)
 		}
-		return fmt.Errorf("container %q not found in claw deployment", ClawInitConfigContainerName)
 	}
-	return fmt.Errorf("claw deployment not found in manifests")
+	return mergeEnvFromIntoSlice(existing, desired), nil
 }
 
 // collectAndDeduplicateMcpEnvFrom gathers envFrom entries from all MCP servers,
@@ -1317,6 +1328,52 @@ func (r *ClawResourceReconciler) stampMcpSecretVersionAnnotation(
 		return nil
 	}
 	return fmt.Errorf("gateway deployment not found for MCP secret version stamping")
+}
+
+// stampChannelSecretVersionAnnotation stamps the gateway deployment pod template
+// with ResourceVersions of Secrets mounted as channel token env vars.
+func (r *ClawResourceReconciler) stampChannelSecretVersionAnnotation(
+	ctx context.Context,
+	objects []*unstructured.Unstructured,
+	instance *clawv1alpha1.Claw,
+) error {
+	versions := make(map[string]string)
+	for _, entry := range collectChannelEnvFrom(instance) {
+		secret := &corev1.Secret{}
+		if err := r.UserSecretReader.Get(ctx, client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      entry.Env.SecretRef.Name,
+		}, secret); err != nil {
+			return fmt.Errorf("failed to get Secret %q for channel %q env %q: %w",
+				entry.Env.SecretRef.Name, entry.Channel, entry.Env.Name, err)
+		}
+		key := mcpAnnotationKey(entry.Channel, entry.Env.Name)
+		versions[key] = secret.ResourceVersion
+	}
+
+	if len(versions) == 0 {
+		return nil
+	}
+
+	gatewayName := getClawDeploymentName(instance.Name)
+	for _, obj := range objects {
+		if obj.GetKind() != DeploymentKind || obj.GetName() != gatewayName {
+			continue
+		}
+
+		annotations, _, _ := unstructured.NestedStringMap(obj.Object, "spec", "template", "metadata", "annotations")
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		for key, rv := range versions {
+			annotations[clawv1alpha1.AnnotationPrefixSecretVersion+"channel-"+key+clawv1alpha1.AnnotationSuffixSecretVersion] = rv
+		}
+		if err := unstructured.SetNestedStringMap(obj.Object, annotations, "spec", "template", "metadata", "annotations"); err != nil {
+			return fmt.Errorf("failed to set channel secret version annotations: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("gateway deployment not found for channel secret version stamping")
 }
 
 // mcpAnnotationKey produces a safe, deterministic, short annotation key segment

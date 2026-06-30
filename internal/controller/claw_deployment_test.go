@@ -195,6 +195,31 @@ func TestConfigureClawImage(t *testing.T) {
 		assert.Equal(t, expected, gateway["image"])
 	})
 
+	t.Run("should prefer spec.image over spec.version", func(t *testing.T) {
+		objects := makeDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Image = "quay.io/sallyom/openclaw:latest"
+		instance.Spec.Version = testClawVersion
+
+		require.NoError(t, configureClawImage(objects, instance))
+
+		initContainers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "initContainers")
+		for _, ic := range initContainers {
+			c := ic.(map[string]any)
+			switch c["name"].(string) {
+			case ClawInitVolumeContainerName, ClawInitConfigContainerName:
+				assert.Equal(t, "quay.io/sallyom/openclaw:latest", c["image"])
+			}
+		}
+
+		containers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "containers")
+		gateway := containers[0].(map[string]any)
+		assert.Equal(t, "quay.io/sallyom/openclaw:latest", gateway["image"])
+	})
+
 	t.Run("should be no-op when version is empty", func(t *testing.T) {
 		objects := makeDeployment()
 		instance := &clawv1alpha1.Claw{}
@@ -326,6 +351,47 @@ func TestClawImageOverrideIntegration(t *testing.T) {
 		require.NotNil(t, gateway, "gateway container should exist")
 		assert.Equal(t, OpenClawImageBase+":"+DefaultOpenClawVersion, gateway.Image,
 			"should use default version when spec.version is empty")
+	})
+
+	t.Run("should use full image from spec.image for one Claw", func(t *testing.T) {
+		t.Cleanup(func() {
+			deleteAndWaitAllResources(t, namespace)
+		})
+
+		secret := createTestAPIKeySecret(aiModelSecret, namespace, aiModelSecretKey, aiModelSecretValue)
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Namespace = namespace
+		instance.Spec.Credentials = testCredentials()
+		instance.Spec.Image = "quay.io/sallyom/openclaw:latest"
+		instance.Spec.Version = testClawVersion
+		require.NoError(t, k8sClient.Create(ctx, instance))
+
+		reconciler := createClawReconciler()
+		reconcileClaw(t, ctx, reconciler, testInstanceName, namespace)
+
+		deployment := &appsv1.Deployment{}
+		waitFor(t, timeout, interval, func() bool {
+			return k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getClawDeploymentName(testInstanceName),
+				Namespace: namespace,
+			}, deployment) == nil
+		}, "Deployment should be created")
+
+		for _, ic := range deployment.Spec.Template.Spec.InitContainers {
+			switch ic.Name {
+			case ClawInitVolumeContainerName, ClawInitConfigContainerName:
+				assert.Equal(t, "quay.io/sallyom/openclaw:latest", ic.Image,
+					"init container %s should use spec.image", ic.Name)
+			}
+		}
+
+		gateway := findContainer(deployment, ClawGatewayContainerName)
+		require.NotNil(t, gateway, "gateway container should exist")
+		assert.Equal(t, "quay.io/sallyom/openclaw:latest", gateway.Image,
+			"gateway container should use spec.image")
 	})
 }
 
@@ -1726,16 +1792,16 @@ func TestConfigureGatewayForMcpServers(t *testing.T) {
 }
 
 func TestConfigureGatewayForChannels(t *testing.T) {
-	makeInitConfigDeployment := func() []*unstructured.Unstructured {
+	makeGatewayDeployment := func() []*unstructured.Unstructured {
 		dep := &unstructured.Unstructured{}
 		dep.SetKind(DeploymentKind)
 		dep.SetName(getClawDeploymentName(testInstanceName))
 		dep.Object["spec"] = map[string]any{
 			"template": map[string]any{
 				"spec": map[string]any{
-					"initContainers": []any{
+					"containers": []any{
 						map[string]any{
-							"name": ClawInitConfigContainerName,
+							"name": ClawGatewayContainerName,
 							"env":  []any{},
 						},
 					},
@@ -1745,8 +1811,8 @@ func TestConfigureGatewayForChannels(t *testing.T) {
 		return []*unstructured.Unstructured{dep}
 	}
 
-	t.Run("should add discord token env var and secret map", func(t *testing.T) {
-		objects := makeInitConfigDeployment()
+	t.Run("should add discord token env var", func(t *testing.T) {
+		objects := makeGatewayDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
 		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
@@ -1761,27 +1827,22 @@ func TestConfigureGatewayForChannels(t *testing.T) {
 
 		require.NoError(t, configureGatewayForChannels(objects, instance))
 
-		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
-		container := initContainers[0].(map[string]any)
+		containers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "containers")
+		container := containers[0].(map[string]any)
 		envVars := container["env"].([]any)
 
-		require.Len(t, envVars, 2) // CHANNEL_DISCORD_TOKEN + CHANNEL_SECRET_MAP
+		require.Len(t, envVars, 1)
 
 		tokenEnv := envVars[0].(map[string]any)
-		assert.Equal(t, "CHANNEL_DISCORD_TOKEN", tokenEnv["name"])
+		assert.Equal(t, "OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN", tokenEnv["name"])
 		valueFrom := tokenEnv["valueFrom"].(map[string]any)
 		secretKeyRef := valueFrom["secretKeyRef"].(map[string]any)
 		assert.Equal(t, "discord-bot-secret", secretKeyRef["name"])
 		assert.Equal(t, "token", secretKeyRef["key"])
-
-		mapEnv := envVars[1].(map[string]any)
-		assert.Equal(t, "CHANNEL_SECRET_MAP", mapEnv["name"])
-		assert.Contains(t, mapEnv["value"], "CHANNEL_DISCORD_TOKEN")
-		assert.Contains(t, mapEnv["value"], `"channel":"discord"`)
 	})
 
 	t.Run("should be no-op when no channel credentials", func(t *testing.T) {
-		objects := makeInitConfigDeployment()
+		objects := makeGatewayDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
 		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
@@ -1796,14 +1857,14 @@ func TestConfigureGatewayForChannels(t *testing.T) {
 
 		require.NoError(t, configureGatewayForChannels(objects, instance))
 
-		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
-		container := initContainers[0].(map[string]any)
+		containers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "containers")
+		container := containers[0].(map[string]any)
 		envVars := container["env"].([]any)
 		assert.Empty(t, envVars)
 	})
 
 	t.Run("should handle slack with multiple secret roles", func(t *testing.T) {
-		objects := makeInitConfigDeployment()
+		objects := makeGatewayDeployment()
 		instance := &clawv1alpha1.Claw{}
 		instance.Name = testInstanceName
 		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
@@ -1819,21 +1880,88 @@ func TestConfigureGatewayForChannels(t *testing.T) {
 
 		require.NoError(t, configureGatewayForChannels(objects, instance))
 
-		initContainers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "initContainers")
-		container := initContainers[0].(map[string]any)
+		containers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "containers")
+		container := containers[0].(map[string]any)
 		envVars := container["env"].([]any)
 
-		// 2 secret env vars + CHANNEL_SECRET_MAP
-		require.Len(t, envVars, 3)
+		require.Len(t, envVars, 2)
 
 		botEnv := envVars[0].(map[string]any)
-		assert.Equal(t, "CHANNEL_SLACK_BOT_TOKEN", botEnv["name"])
+		assert.Equal(t, "OPENCLAW_CHANNEL_SLACK_BOT_TOKEN", botEnv["name"])
 
 		appEnv := envVars[1].(map[string]any)
-		assert.Equal(t, "CHANNEL_SLACK_APP_TOKEN", appEnv["name"])
+		assert.Equal(t, "OPENCLAW_CHANNEL_SLACK_APP_TOKEN", appEnv["name"])
+	})
 
-		mapEnv := envVars[2].(map[string]any)
-		assert.Equal(t, "CHANNEL_SECRET_MAP", mapEnv["name"])
+	t.Run("should stamp channel secret resource versions on gateway", func(t *testing.T) {
+		t.Cleanup(func() { deleteAndWaitAllResources(t, namespace) })
+		ctx := context.Background()
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "discord-bot-secret", Namespace: namespace},
+			Data:       map[string][]byte{"token": []byte("test-discord-token")},
+		}
+		require.NoError(t, k8sClient.Create(ctx, secret))
+
+		objects := makeGatewayDeployment()
+		instance := &clawv1alpha1.Claw{
+			ObjectMeta: metav1.ObjectMeta{Name: testInstanceName, Namespace: namespace},
+			Spec: clawv1alpha1.ClawSpec{
+				Credentials: []clawv1alpha1.CredentialSpec{
+					{
+						Name:    "discord",
+						Channel: "discord",
+						SecretRef: []clawv1alpha1.SecretRefEntry{
+							{Name: "discord-bot-secret", Key: "token"},
+						},
+					},
+				},
+			},
+		}
+
+		reconciler := createClawReconciler()
+		require.NoError(t, reconciler.stampChannelSecretVersionAnnotation(ctx, objects, instance))
+
+		annotations, _, _ := unstructured.NestedStringMap(objects[0].Object, "spec", "template", "metadata", "annotations")
+		annotationKey := clawv1alpha1.AnnotationPrefixSecretVersion +
+			"channel-" + mcpAnnotationKey("discord", "OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN") +
+			clawv1alpha1.AnnotationSuffixSecretVersion
+		assert.Equal(t, secret.ResourceVersion, annotations[annotationKey])
+	})
+
+	t.Run("should reject existing channel env var collision", func(t *testing.T) {
+		objects := makeGatewayDeployment()
+		containers, _, _ := unstructured.NestedSlice(objects[0].Object, "spec", "template", "spec", "containers")
+		container := containers[0].(map[string]any)
+		container["env"] = []any{
+			map[string]any{
+				"name": "OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN",
+				"valueFrom": map[string]any{
+					"secretKeyRef": map[string]any{
+						"name": "different-secret",
+						"key":  "token",
+					},
+				},
+			},
+		}
+		containers[0] = container
+		require.NoError(t, unstructured.SetNestedSlice(objects[0].Object, containers, "spec", "template", "spec", "containers"))
+
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+			{
+				Name:    "discord",
+				Channel: "discord",
+				SecretRef: []clawv1alpha1.SecretRefEntry{
+					{Name: "discord-bot-secret", Key: "token"},
+				},
+			},
+		}
+
+		err := configureGatewayForChannels(objects, instance)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN")
 	})
 }
 

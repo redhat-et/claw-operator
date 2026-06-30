@@ -788,6 +788,13 @@ type ClawSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
 	Version string `json:"version,omitempty"`
 
+	// Image overrides the full OpenClaw container image reference for this
+	// instance. Use this for one-off development or validation images. When
+	// set, it takes precedence over spec.version.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	Image string `json:"image,omitempty"`
+
 	// ServiceAccountName sets the Kubernetes ServiceAccount on the gateway pod.
 	// When set, automountServiceAccountToken is enabled so the SA token is mounted.
 	// When omitted, the default ServiceAccount is used with no token mounted.

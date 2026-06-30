@@ -502,6 +502,13 @@ spec:
                   Idle, when set to true, instructs the operator to scale all managed
                   Deployments to zero replicas. Set to false (or omit) to run normally.
                 type: boolean
+              image:
+                description: |-
+                  Image overrides the full OpenClaw container image reference for this
+                  instance. Use this for one-off development or validation images. When
+                  set, it takes precedence over spec.version.
+                minLength: 1
+                type: string
               mcpServers:
                 additionalProperties:
                   description: McpServerSpec defines an MCP server the operator injects

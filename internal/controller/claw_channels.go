@@ -26,8 +26,9 @@ import (
 // channelSecretRole defines a secret role with its placeholder token for proxy injection.
 type channelSecretRole struct {
 	Role        string
+	ConfigKey   string
 	Placeholder string
-	GatewayEnv  string // env var name to mount the real secret on the gateway container
+	GatewayEnv  string // env var name to mount on the gateway container for OpenClaw SecretRef resolution
 }
 
 // channelDefault holds the inferred proxy and config defaults for a known messaging channel.
@@ -39,6 +40,7 @@ type channelDefault struct {
 	Companions   []string // additional domains to allowlist (type: none)
 	SecretRoles  []channelSecretRole
 	AllowedPaths []string // for the primary route only (e.g., Slack app-token path)
+	Gateway443   bool     // channel runtime opens direct WebSocket/session traffic from gateway
 
 	// ConfigBase is the base channel config block injected into operator.json.
 	// Keys like "enabled" and token placeholders are added by buildChannelConfig.
@@ -51,6 +53,7 @@ var protectedChannelKeys = map[string]bool{
 	"botToken": true,
 	"token":    true,
 	"appToken": true,
+	"proxy":    true,
 }
 
 // knownChannels maps channel names to their inferred defaults.
@@ -60,7 +63,7 @@ var knownChannels = map[string]channelDefault{
 		Domain:    "api.telegram.org",
 		PathToken: &clawv1alpha1.PathTokenConfig{Prefix: "/bot"},
 		SecretRoles: []channelSecretRole{
-			{Placeholder: "placeholder", GatewayEnv: "CHANNEL_TELEGRAM_TOKEN"},
+			{ConfigKey: "botToken", Placeholder: "placeholder", GatewayEnv: "OPENCLAW_CHANNEL_TELEGRAM_BOT_TOKEN"},
 		},
 		ConfigBase: map[string]any{
 			"botToken":  "placeholder",
@@ -77,7 +80,7 @@ var knownChannels = map[string]channelDefault{
 			"cdn.discordapp.com",
 		},
 		SecretRoles: []channelSecretRole{
-			{Placeholder: "placeholder", GatewayEnv: "CHANNEL_DISCORD_TOKEN"},
+			{ConfigKey: "token", Placeholder: "placeholder", GatewayEnv: "OPENCLAW_CHANNEL_DISCORD_BOT_TOKEN"},
 		},
 		ConfigBase: map[string]any{
 			"token": "placeholder",
@@ -90,13 +93,14 @@ var knownChannels = map[string]channelDefault{
 			".slack.com",
 		},
 		SecretRoles: []channelSecretRole{
-			{Role: "botToken", Placeholder: "xoxb-placeholder", GatewayEnv: "CHANNEL_SLACK_BOT_TOKEN"},
-			{Role: "appToken", Placeholder: "xapp-placeholder", GatewayEnv: "CHANNEL_SLACK_APP_TOKEN"},
+			{Role: "botToken", ConfigKey: "botToken", Placeholder: "xoxb-placeholder", GatewayEnv: "OPENCLAW_CHANNEL_SLACK_BOT_TOKEN"},
+			{Role: "appToken", ConfigKey: "appToken", Placeholder: "xapp-placeholder", GatewayEnv: "OPENCLAW_CHANNEL_SLACK_APP_TOKEN"},
 		},
 		ConfigBase: map[string]any{
 			"botToken": "xoxb-placeholder",
 			"appToken": "xapp-placeholder",
 		},
+		Gateway443: true,
 	},
 	"whatsapp": {
 		Type: clawv1alpha1.CredentialTypeNone,
@@ -108,6 +112,7 @@ var knownChannels = map[string]channelDefault{
 			".fbcdn.net",
 		},
 		ConfigBase: map[string]any{},
+		Gateway443: true,
 	},
 }
 
@@ -199,7 +204,33 @@ func buildChannelConfig(cred clawv1alpha1.CredentialSpec) (map[string]any, error
 		config = deepMergeMap(config, userConfig)
 	}
 
+	for _, sr := range defaults.SecretRoles {
+		if sr.GatewayEnv == "" {
+			continue
+		}
+		var ref *clawv1alpha1.SecretRefEntry
+		if sr.Role != "" {
+			ref = secretForRole(cred, sr.Role)
+		} else {
+			ref = primarySecret(cred)
+		}
+		if ref == nil {
+			continue
+		}
+		if placeholder, ok := config[sr.ConfigKey].(string); ok && placeholder == sr.Placeholder {
+			config[sr.ConfigKey] = channelEnvSecretRef(sr.GatewayEnv)
+		}
+	}
+
 	return config, nil
+}
+
+func channelEnvSecretRef(envName string) map[string]any {
+	return map[string]any{
+		"source":   "env",
+		"provider": "default",
+		"id":       envName,
+	}
 }
 
 // deepMergeMap recursively merges src into dst. Objects are deep-merged,
@@ -227,6 +258,7 @@ func deepMergeMap(dst, src map[string]any) map[string]any {
 func injectChannels(config map[string]any, instance *clawv1alpha1.Claw) error {
 	channels := map[string]any{}
 	plugins := map[string]any{}
+	discordProxyURL := fmt.Sprintf("http://%s-proxy:8080", instance.Name)
 
 	for _, cred := range instance.Spec.Credentials {
 		if cred.Channel == "" {
@@ -236,6 +268,9 @@ func injectChannels(config map[string]any, instance *clawv1alpha1.Claw) error {
 		channelConfig, err := buildChannelConfig(cred)
 		if err != nil {
 			return err
+		}
+		if cred.Channel == "discord" {
+			channelConfig["proxy"] = discordProxyURL
 		}
 		channels[cred.Channel] = channelConfig
 		plugins[cred.Channel] = map[string]any{"enabled": true}
@@ -252,4 +287,14 @@ func injectChannels(config map[string]any, instance *clawv1alpha1.Claw) error {
 		existingEntries[k] = v
 	}
 	return nil
+}
+
+func managedChannelNames(instance *clawv1alpha1.Claw) []string {
+	var names []string
+	for _, cred := range instance.Spec.Credentials {
+		if cred.Channel != "" {
+			names = append(names, cred.Channel)
+		}
+	}
+	return names
 }

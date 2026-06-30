@@ -663,7 +663,9 @@ The gateway pod **cannot** reach any API server directly — egress is restricte
 
 ## Messaging Channels
 
-For known channels (`telegram`, `discord`, `slack`, `whatsapp`), the operator automatically infers all proxy configuration — domain, credential type, companion routes, and placeholder tokens. You only need `name`, `channel`, and `secretRef`. The operator also injects the channel's config into `operator.json` so OpenClaw starts with the channel pre-configured. No manual `openclaw channels add` is needed.
+For known channels (`telegram`, `discord`, `slack`, `whatsapp`), the operator automatically infers all proxy configuration — domain, credential type, companion routes, and SecretRef-backed token config. You only need `name`, `channel`, and `secretRef`. The operator also injects the channel's config into `operator.json` so OpenClaw starts with the channel pre-configured. No manual `openclaw channels add` is needed.
+
+> **Security boundary:** Channel tokens are mounted on the gateway as Secret-backed env vars for OpenClaw runtime SecretRef resolution because current channel clients need tokens for WebSocket/session authentication. This differs from LLM provider credentials, which remain proxy-injected and do not land in the gateway pod.
 
 > **Adding credentials incrementally:** Each `oc apply` of the Claw CR **replaces** the entire `credentials` list. When adding a new channel, include all existing credentials in the YAML — otherwise they will be removed. You can retrieve your current configuration with `oc get claw instance -n $NS -o yaml` and add the new entry to the list.
 
@@ -699,7 +701,7 @@ spec:
 EOF
 ```
 
-The operator infers `type: pathToken`, `domain: api.telegram.org`, and `pathToken.prefix: /bot`. The proxy intercepts requests like `/botplaceholder/sendMessage` and forwards them as `/bot<REAL_TOKEN>/sendMessage`. The real token never reaches the gateway pod.
+The operator infers `type: pathToken`, `domain: api.telegram.org`, and `pathToken.prefix: /bot`. Telegram traffic uses the proxy route for `api.telegram.org`, but the bot token is mounted on the gateway as a Secret-backed env var so OpenClaw can resolve the channel SecretRef at runtime.
 
 By default, the operator sets `dmPolicy: "open"` so anyone who knows the bot's username can message it. This means Telegram works immediately after setup — no pairing approval needed.
 
@@ -1377,7 +1379,7 @@ In user-managed mode, the operator:
 - Seeds `openclaw.json` on first boot from `spec.config.raw`, provider/model settings, and any `spec.agentFiles` source
 - Preserves runtime edits to `openclaw.json`, skills, plugins, MCP config, and workspace files on later restarts
 - Continues to enforce gateway infrastructure (`gateway.mode`, `gateway.bind`, `gateway.port`, gateway auth, and update config)
-- Continues to route credentials through the proxy so real secrets do not land in the gateway pod
+- Continues to route provider/API credentials through the proxy so those real secrets do not land in the gateway pod
 - Does not inject the operator's CR-management platform/Kubernetes skills, bootstrap hook, or `spec.plugins` init container
 - Seeds a user-owned deployment context skill at `skills/deployment/SKILL.md` if that file does not already exist
 
@@ -2364,6 +2366,16 @@ This overrides the image tag on all OpenClaw containers (`init-volume`, `init-co
 The version must match the pattern `^[a-z0-9][a-z0-9._-]*$` (lowercase alphanumeric, dots, dashes, underscores). The plugins init container (`init-plugins`) automatically picks up the overridden image since it reads the gateway container's image at runtime.
 
 > **When to use this:** OpenClaw releases frequently. If a feature or fix requires a newer OpenClaw version than what the operator ships with, `spec.version` lets you upgrade without waiting for an operator rebuild.
+
+For a one-off Claw that needs an unreleased or custom-built OpenClaw image, set `spec.image` to a full image reference:
+
+```yaml
+spec:
+  image: quay.io/example/openclaw:test
+```
+
+`spec.image` overrides `spec.version` for that Claw only.
+Normal users should prefer `spec.version` for released OpenClaw builds and `spec.image` for a single custom image.
 
 ---
 
