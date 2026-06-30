@@ -114,17 +114,17 @@ func userConfiguredMemorySearch(instance *clawv1alpha1.Claw) bool {
 // active (explicitly enabled AND plugin installation is allowed), so
 // operator.json never selects a context engine that effectivePlugins won't
 // install. Skipped entirely when the stack is off or the user owns memory config.
-func injectMemoryStack(config map[string]any, instance *clawv1alpha1.Claw) {
+// userOwnsMemorySearch reports whether the user set memorySearch in
+// spec.config.raw (computed once by the caller); when true the operator does
+// not enable vector recall, leaving that config to the user.
+func injectMemoryStack(config map[string]any, instance *clawv1alpha1.Claw, userOwnsMemorySearch bool) {
 	if !memoryStackEnabled(instance) || userHasMemoryStackConfig(config) {
 		return
 	}
 
 	_, baseProvider, ok := firstEmbeddingProvider(instance)
-	if ok {
-		rawCfg, _ := parseUserRawConfig(instance)
-		if !userHasMemorySearchConfig(rawCfg) {
-			setNestedValue(config, true, "agents", "defaults", "memorySearch", "enabled")
-		}
+	if ok && !userOwnsMemorySearch {
+		setNestedValue(config, true, "agents", "defaults", "memorySearch", "enabled")
 	}
 
 	entries := ensureNestedMap(ensureNestedMap(config, "plugins"), "entries")

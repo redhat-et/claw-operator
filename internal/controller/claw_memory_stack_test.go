@@ -120,7 +120,7 @@ func TestInjectMemoryStack(t *testing.T) {
 			},
 		}}
 		injectMemorySearch(config, instance)
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, false)
 
 		ms := memSearch(config)
 		assert.Equal(t, true, ms["enabled"])
@@ -153,7 +153,7 @@ func TestInjectMemoryStack(t *testing.T) {
 			},
 		}}
 		injectMemorySearch(config, instance)
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, false)
 
 		assert.Equal(t, false, memSearch(config)["enabled"])
 		entries := memEntries(config)
@@ -165,7 +165,7 @@ func TestInjectMemoryStack(t *testing.T) {
 	t.Run("skips entirely when disabled", func(t *testing.T) {
 		config := map[string]any{}
 		instance := &clawv1alpha1.Claw{Spec: clawv1alpha1.ClawSpec{Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(false)}}}
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, false)
 		_, hasPlugins := config["plugins"]
 		assert.False(t, hasPlugins)
 	})
@@ -176,7 +176,7 @@ func TestInjectMemoryStack(t *testing.T) {
 			Memory:       &clawv1alpha1.MemorySpec{Enabled: ptr.To(true)},
 			Restrictions: &clawv1alpha1.RestrictionsSpec{PluginInstallation: ptr.To(false)},
 		}}
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, false)
 		entries := memEntries(config)
 		assert.Equal(t, true, entries["memory-wiki"].(map[string]any)["enabled"], "memory-wiki seeds with plugin install disabled")
 		assert.Equal(t, true, entries["memory-core"].(map[string]any)["config"].(map[string]any)["dreaming"].(map[string]any)["enabled"], "dreaming seeds with plugin install disabled")
@@ -192,7 +192,7 @@ func TestInjectMemoryStack(t *testing.T) {
 			Memory:       &clawv1alpha1.MemorySpec{Enabled: ptr.To(true), Lossless: ptr.To(true)},
 			Restrictions: &clawv1alpha1.RestrictionsSpec{PluginInstallation: ptr.To(false)},
 		}}
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, false)
 		entries := memEntries(config)
 		assert.Equal(t, true, entries["memory-wiki"].(map[string]any)["enabled"], "native layers still seed")
 		_, hasLossless := entries["lossless-claw"]
@@ -208,7 +208,7 @@ func TestInjectMemoryStack(t *testing.T) {
 		instance := &clawv1alpha1.Claw{Spec: clawv1alpha1.ClawSpec{
 			Memory: &clawv1alpha1.MemorySpec{Enabled: ptr.To(true)},
 		}}
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, false)
 		entries := config["plugins"].(map[string]any)["entries"].(map[string]any)
 		assert.Equal(t, false, entries["memory-wiki"].(map[string]any)["enabled"], "user value preserved")
 		_, hasCore := entries["memory-core"]
@@ -224,7 +224,7 @@ func TestInjectMemoryStack(t *testing.T) {
 				{Name: "openai", Type: clawv1alpha1.CredentialTypeAPIKey, Provider: "openai"},
 			},
 		}}
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, false)
 		slots := config["plugins"].(map[string]any)["slots"].(map[string]any)
 		assert.Equal(t, "custom-engine", slots["contextEngine"], "user value preserved")
 		_, hasEntries := config["plugins"].(map[string]any)["entries"]
@@ -251,7 +251,7 @@ func TestInjectMemoryStack(t *testing.T) {
 			},
 		}}
 		// injectMemorySearch would skip (user set memorySearch); injectMemoryStack must not re-enable.
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, true)
 		assert.Equal(t, false, memSearch(config)["enabled"], "user's enabled:false must survive stack injection")
 		// the lossless path still seeds the contextEngine slot:
 		slots := config["plugins"].(map[string]any)["slots"].(map[string]any)
@@ -410,7 +410,7 @@ func TestInjectMemoryStackLossless(t *testing.T) {
 
 	t.Run("lossless off seeds native, not the context engine", func(t *testing.T) {
 		config := map[string]any{}
-		injectMemoryStack(config, openaiInstance(false))
+		injectMemoryStack(config, openaiInstance(false), false)
 		entries := memEntries(config)
 		assert.Equal(t, true, entries["memory-core"].(map[string]any)["config"].(map[string]any)["dreaming"].(map[string]any)["enabled"])
 		assert.Equal(t, true, entries["memory-wiki"].(map[string]any)["enabled"])
@@ -423,7 +423,7 @@ func TestInjectMemoryStackLossless(t *testing.T) {
 
 	t.Run("lossless on adds the context engine slot and entry", func(t *testing.T) {
 		config := map[string]any{}
-		injectMemoryStack(config, openaiInstance(true))
+		injectMemoryStack(config, openaiInstance(true), false)
 		slots := config["plugins"].(map[string]any)["slots"].(map[string]any)
 		assert.Equal(t, "lossless-claw", slots["contextEngine"])
 		lossless := memEntries(config)["lossless-claw"].(map[string]any)
@@ -435,7 +435,7 @@ func TestInjectMemoryStackLossless(t *testing.T) {
 		config := map[string]any{}
 		instance := openaiInstance(false)
 		instance.Spec.Restrictions = &clawv1alpha1.RestrictionsSpec{PluginInstallation: ptr.To(false)}
-		injectMemoryStack(config, instance)
+		injectMemoryStack(config, instance, false)
 		assert.Equal(t, true, memEntries(config)["memory-wiki"].(map[string]any)["enabled"])
 	})
 }

@@ -821,7 +821,9 @@ func (r *ClawResourceReconciler) enrichConfigAndNetworkPolicy(
 	injectProviderPlugins(config, instance)
 	injectModelCatalog(config, instance)
 	injectMemorySearch(config, instance)
-	injectMemoryStack(config, instance)
+	// userConfig was parsed above; reuse it to decide memorySearch ownership
+	// instead of re-parsing spec.config.raw inside injectMemoryStack.
+	injectMemoryStack(config, instance, userHasMemorySearchConfig(userConfig))
 	if err := injectChannels(config, instance); err != nil {
 		return fmt.Errorf("failed to inject channels: %w", err)
 	}
