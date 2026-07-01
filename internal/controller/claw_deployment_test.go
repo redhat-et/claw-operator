@@ -195,6 +195,39 @@ func TestConfigureClawImage(t *testing.T) {
 		assert.Equal(t, expected, gateway["image"])
 	})
 
+	t.Run("should use OpenShell OpenClaw image override when enabled", func(t *testing.T) {
+		objects := makeDeployment()
+		instance := &clawv1alpha1.Claw{}
+		instance.Name = testInstanceName
+		instance.Spec.Version = testClawVersion
+		instance.Spec.OpenShell = &clawv1alpha1.OpenShellSpec{
+			Enabled:       true,
+			OpenClawImage: "quay.io/sallyom/openclaw:openshell",
+		}
+
+		require.NoError(t, configureClawImage(objects, instance))
+
+		initContainers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "initContainers")
+		for _, ic := range initContainers {
+			c := ic.(map[string]any)
+			name := c["name"].(string)
+			switch name {
+			case ClawInitVolumeContainerName, ClawInitConfigContainerName:
+				assert.Equal(t, "quay.io/sallyom/openclaw:openshell", c["image"],
+					"container %s should use OpenShell image override", name)
+			case "wait-for-proxy":
+				assert.Equal(t, "mirror.gcr.io/library/busybox:1.37", c["image"],
+					"wait-for-proxy should not be affected")
+			}
+		}
+
+		containers, _, _ := unstructured.NestedSlice(
+			objects[0].Object, "spec", "template", "spec", "containers")
+		gateway := containers[0].(map[string]any)
+		assert.Equal(t, "quay.io/sallyom/openclaw:openshell", gateway["image"])
+	})
+
 	t.Run("should be no-op when version is empty", func(t *testing.T) {
 		objects := makeDeployment()
 		instance := &clawv1alpha1.Claw{}

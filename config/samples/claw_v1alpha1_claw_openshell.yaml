@@ -1,0 +1,20 @@
+apiVersion: claw.sandbox.redhat.com/v1alpha1
+kind: Claw
+metadata:
+  name: openshell-instance
+spec:
+  credentials:
+    - name: openai
+      type: bearer
+      secretRef:
+        - name: openai-api-key
+          key: api-key
+      provider: openai
+  openshell:
+    enabled: true
+    # Existing in-cluster OpenShell gateway Service. The claw-operator does not
+    # deploy or manage the OpenShell gateway.
+    gatewayEndpoint: http://openshell.openshell-alice.svc.cluster.local:8080
+    openClawImage: quay.io/sallyom/openclaw:openshell
+    sandboxImage: quay.io/sallyom/openclaw-openshell-sandbox:latest
+    mode: remote

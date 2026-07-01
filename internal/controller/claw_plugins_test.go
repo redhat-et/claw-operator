@@ -526,6 +526,25 @@ func TestEffectivePlugins(t *testing.T) {
 		require.Len(t, plugins, 1)
 		assert.Equal(t, "@openclaw/anthropic-vertex-provider", plugins[0])
 	})
+
+	t.Run("adds openshell plugin when openshell is enabled", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				OpenShell: &clawv1alpha1.OpenShellSpec{Enabled: true},
+			},
+		}
+		assert.Equal(t, []string{openShellPluginPackage}, effectivePlugins(instance))
+	})
+
+	t.Run("does not duplicate explicitly configured openshell plugin", func(t *testing.T) {
+		instance := &clawv1alpha1.Claw{
+			Spec: clawv1alpha1.ClawSpec{
+				Plugins:   []string{openShellPluginPackage + "@2026.6.26"},
+				OpenShell: &clawv1alpha1.OpenShellSpec{Enabled: true},
+			},
+		}
+		assert.Equal(t, []string{openShellPluginPackage + "@2026.6.26"}, effectivePlugins(instance))
+	})
 }
 
 // --- stampGatewayConfigHash with plugins tests ---

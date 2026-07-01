@@ -869,6 +869,57 @@ spec:
                       When true, .svc and .svc.cluster.local traffic bypasses the proxy.
                     type: boolean
                 type: object
+              openshell:
+                description: |-
+                  OpenShell configures OpenClaw to delegate agent session execution to
+                  OpenShell-managed sandbox pods while keeping provider traffic on the
+                  claw-proxy path.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled activates the OpenShell sandbox backend for
+                      agent sessions.
+                    type: boolean
+                  gatewayEndpoint:
+                    description: GatewayEndpoint is the explicit in-cluster OpenShell
+                      gateway URL.
+                    pattern: ^https?://
+                    type: string
+                  mode:
+                    default: remote
+                    description: Mode controls OpenShell workspace synchronization.
+                      Defaults to remote.
+                    enum:
+                    - remote
+                    - mirror
+                    type: string
+                  openClawImage:
+                    description: |-
+                      OpenClawImage overrides the OpenClaw gateway/init image when OpenShell is
+                      enabled. Use an image that includes the OpenShell CLI and plugin runtime
+                      dependencies.
+                    minLength: 1
+                    type: string
+                  sandboxImage:
+                    default: quay.io/sallyom/openclaw-openshell-sandbox:latest
+                    description: |-
+                      SandboxImage is passed to the OpenShell plugin as the sandbox image.
+                      Defaults to the OpenClaw OpenShell sandbox image.
+                    type: string
+                  timeoutSeconds:
+                    default: 180
+                    description: |-
+                      TimeoutSeconds controls OpenShell CLI operations such as create/upload.
+                      Defaults to 180 seconds.
+                    format: int32
+                    maximum: 3600
+                    minimum: 1
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: gatewayEndpoint is required when OpenShell is enabled
+                  rule: '!has(self.enabled) || self.enabled == false || (has(self.gatewayEndpoint)
+                    && size(self.gatewayEndpoint) > 0)'
               plugins:
                 description: |-
                   Plugins lists OpenClaw plugins to install via an init container before
