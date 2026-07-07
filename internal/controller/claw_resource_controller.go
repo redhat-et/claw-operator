@@ -348,6 +348,35 @@ func getPVCName(instanceName string) string { //nolint:unparam // called only fr
 	return instanceName + "-home-pvc"
 }
 
+// shouldSkipPVCOwnerRef returns true when the PVC already exists in the
+// cluster without a controller owner reference pointing to this Claw
+// instance. Pre-existing PVCs (e.g. restored from a VolumeSnapshot) must
+// not receive an ownerRef because the operator lacks delete permission on
+// PVCs and the API server rejects ownerRef writes without it.
+func (r *ClawResourceReconciler) shouldSkipPVCOwnerRef(
+	ctx context.Context,
+	instance *clawv1alpha1.Claw,
+	obj *unstructured.Unstructured,
+) (bool, error) {
+	existing := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, client.ObjectKey{
+		Namespace: instance.Namespace,
+		Name:      obj.GetName(),
+	}, existing)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check existing PVC: %w", err)
+	}
+	ownerRef := metav1.GetControllerOf(existing)
+	if ownerRef != nil && ownerRef.UID == instance.UID {
+		return false, nil
+	}
+	log.FromContext(ctx).Info("Skipping ownerRef on pre-existing PVC", "name", obj.GetName())
+	return true, nil
+}
+
 func getServiceName(instanceName string) string {
 	return instanceName
 }
@@ -675,9 +704,20 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		remainingObjects = append(remainingObjects, obj)
 	}
 
-	// Set namespace and owner references
+	// Set namespace and owner references.
+	// PVCs that already exist without an owner reference (e.g. restored
+	// from a VolumeSnapshot) are skipped — setting an ownerRef on a
+	// resource the operator cannot delete is forbidden by the API server.
+	// Operator-created PVCs get the ownerRef normally for garbage collection.
 	for _, obj := range remainingObjects {
 		obj.SetNamespace(instance.Namespace)
+		if obj.GetKind() == PersistentVolumeClaimKind {
+			if skip, err := r.shouldSkipPVCOwnerRef(ctx, instance, obj); err != nil {
+				return ctrl.Result{}, err
+			} else if skip {
+				continue
+			}
+		}
 		if err := controllerutil.SetControllerReference(instance, obj, r.Scheme); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to set controller reference: %w", err)
 		}
