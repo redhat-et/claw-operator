@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -439,6 +440,55 @@ func TestOpenClawPersistentVolumeClaimController(t *testing.T) {
 					Namespace: namespace,
 				}, pvc) == nil
 			}, "PVC should be created for the named instance")
+		})
+	})
+
+	t.Run("When a PVC already exists without ownerRef (snapshot restore)", func(t *testing.T) {
+		const resourceName = testInstanceName
+		ctx := context.Background()
+
+		t.Run("should skip ownerRef and not mutate the pre-existing PVC", func(t *testing.T) {
+			t.Cleanup(func() {
+				deleteAndWaitAllResources(t, namespace)
+				pvc := &corev1.PersistentVolumeClaim{}
+				_ = k8sClient.Get(ctx, client.ObjectKey{
+					Name:      getPVCName(resourceName),
+					Namespace: namespace,
+				}, pvc)
+				if pvc.UID != "" {
+					_ = k8sClient.Delete(ctx, pvc)
+				}
+			})
+
+			preExistingPVC := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      getPVCName(resourceName),
+					Namespace: namespace,
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("10Gi"),
+						},
+					},
+				},
+			}
+			require.NoError(t, k8sClient.Create(ctx, preExistingPVC))
+
+			createClawInstance(t, ctx, resourceName, namespace)
+			reconciler := createClawReconciler()
+
+			reconcileClaw(t, ctx, reconciler, resourceName, namespace)
+
+			pvc := &corev1.PersistentVolumeClaim{}
+			require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{
+				Name:      getPVCName(resourceName),
+				Namespace: namespace,
+			}, pvc))
+
+			assert.Empty(t, pvc.OwnerReferences,
+				"pre-existing PVC should not have ownerRef set")
 		})
 	})
 }
@@ -910,6 +960,7 @@ func TestOpenClawRouteConfiguration(t *testing.T) {
 				Client:           k8sClient,
 				Scheme:           scheme.Scheme,
 				UserSecretReader: k8sClient,
+				APIReader:        k8sClient,
 			}
 
 			_, err := reconciler.Reconcile(ctx, ctrl.Request{
