@@ -76,6 +76,7 @@ func effectivePlugins(instance *clawv1alpha1.Claw) []string {
 func operatorRequiredPlugins(instance *clawv1alpha1.Claw) []string {
 	plugins := requiredProviderPlugins(instance)
 	plugins = append(plugins, requiredDiagnosticsPlugins(instance)...)
+	plugins = append(plugins, requiredOpenShellPlugins(instance)...)
 	return plugins
 }
 
@@ -146,6 +147,13 @@ func requiredDiagnosticsPlugins(instance *clawv1alpha1.Claw) []string {
 		plugins = append(plugins, "@openclaw/diagnostics-prometheus")
 	}
 	return plugins
+}
+
+func requiredOpenShellPlugins(instance *clawv1alpha1.Claw) []string {
+	if !openShellEnabled(instance) {
+		return nil
+	}
+	return []string{openShellPluginPackage}
 }
 
 func generatePluginInstallScript(plugins []string, preserveUnmanagedOpt ...bool) string {
