@@ -265,6 +265,7 @@ func main() {
 		Client:                      mgr.GetClient(),
 		Scheme:                      mgr.GetScheme(),
 		UserSecretReader:            controller.NewLoggingUserSecretReader(mgr.GetAPIReader()),
+		APIReader:                   mgr.GetAPIReader(),
 		ProxyImage:                  os.Getenv("PROXY_IMAGE"),
 		KubectlImage:                os.Getenv("KUBECTL_IMAGE"),
 		ImagePullPolicy:             imagePullPolicy,

@@ -341,6 +341,7 @@ func createClawReconciler() *ClawResourceReconciler {
 		Client:           k8sClient,
 		Scheme:           scheme.Scheme,
 		UserSecretReader: k8sClient,
+		APIReader:        k8sClient,
 	}
 }
 

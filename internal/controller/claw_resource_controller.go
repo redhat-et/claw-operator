@@ -348,6 +348,39 @@ func getPVCName(instanceName string) string { //nolint:unparam // called only fr
 	return instanceName + "-home-pvc"
 }
 
+// shouldSkipPVCOwnerRef returns true when the PVC already exists in the
+// cluster without a controller owner reference pointing to this Claw
+// instance. Pre-existing PVCs (e.g. restored from a VolumeSnapshot) must
+// not receive an ownerRef because the operator lacks delete permission on
+// PVCs and the API server rejects ownerRef writes without it.
+func (r *ClawResourceReconciler) shouldSkipPVCOwnerRef(
+	ctx context.Context,
+	instance *clawv1alpha1.Claw,
+	obj *unstructured.Unstructured,
+) (bool, error) {
+	existing := &corev1.PersistentVolumeClaim{}
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	err := reader.Get(ctx, client.ObjectKey{
+		Namespace: instance.Namespace,
+		Name:      obj.GetName(),
+	}, existing)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check existing PVC: %w", err)
+	}
+	ownerRef := metav1.GetControllerOf(existing)
+	if ownerRef != nil && ownerRef.UID == instance.UID {
+		return false, nil
+	}
+	log.FromContext(ctx).Info("Skipping ownerRef on pre-existing PVC", "name", obj.GetName())
+	return true, nil
+}
+
 func getServiceName(instanceName string) string {
 	return instanceName
 }
@@ -396,9 +429,12 @@ type ClawResourceReconciler struct {
 	// bypassing the informer cache (where Transform has stripped .Data).
 	// Operator-owned Secrets keep full .Data in cache and use r.Get().
 	UserSecretReader client.Reader
-	ProxyImage       string
-	KubectlImage     string
-	ImagePullPolicy  string
+	// APIReader reads directly from the API server, bypassing the
+	// label-filtered informer cache. Used for pre-existing PVC detection.
+	APIReader       client.Reader
+	ProxyImage      string
+	KubectlImage    string
+	ImagePullPolicy string
 	// DisableUserConfigManagement lets cluster admins reject
 	// spec.config.management=user for operator deployments that require
 	// fully operator-managed runtime config.
@@ -663,7 +699,10 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		meta.RemoveStatusCondition(&instance.Status.Conditions, clawv1alpha1.ConditionTypeMcpServersConfigured)
 	}
 
-	// Filter out Route (applied in phase above) and proxy ConfigMap (controller-managed)
+	// Filter out Route (applied in phase above), proxy ConfigMap (controller-managed),
+	// and pre-existing PVCs (e.g. restored from a VolumeSnapshot). Pre-existing PVCs
+	// are excluded from both ownerRef assignment and the SSA apply path to avoid
+	// forbidden ownerRef writes and immutable spec drift on user-managed claims.
 	remainingObjects := []*unstructured.Unstructured{}
 	for _, obj := range objects {
 		if obj.GetKind() == RouteKind {
@@ -671,6 +710,14 @@ func (r *ClawResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		if obj.GetKind() == ConfigMapKind && obj.GetName() == getProxyConfigMapName(instance.Name) {
 			continue
+		}
+		if obj.GetKind() == PersistentVolumeClaimKind {
+			obj.SetNamespace(instance.Namespace)
+			if skip, err := r.shouldSkipPVCOwnerRef(ctx, instance, obj); err != nil {
+				return ctrl.Result{}, err
+			} else if skip {
+				continue
+			}
 		}
 		remainingObjects = append(remainingObjects, obj)
 	}
