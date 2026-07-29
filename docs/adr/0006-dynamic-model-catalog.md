@@ -5,7 +5,7 @@
 
 ## Overview
 
-The model picker list (`agents.defaults.models` in `openclaw.json`) was hardcoded in the ConfigMap seed, always showing the same set of models regardless of which providers the user actually configured via the Claw CR. This meant a Google-only deployment showed Claude models that fail when selected, an Anthropic-only deployment showed Gemini models that fail, and OpenRouter deployments showed none of their supported models.
+The model picker list (`agents.defaults.models` in `openclaw.json`) was hardcoded in the ConfigMap seed, always showing the same set of models regardless of which providers the user actually configured via the Claw CR. This meant a Google-only deployment showed Claude models that fail when selected, an Anthropic-only deployment showed Gemini models that fail, and providers without seed entries showed none of their supported models.
 
 This ADR covers the design for dynamically generating the model catalog in `operator.json` based on the providers configured in `spec.credentials`, including proper version numbers in all aliases.
 
@@ -56,7 +56,7 @@ A dedicated injection function in the reconciliation pipeline, called after prov
 1. Iterates over credentials with `provider` set, skipping `pathToken` (same filters as provider injection)
 2. Derives the provider key: `usesVertexSDK(cred)` produces `{provider}-vertex`, otherwise `{provider}`
 3. Strips the `-vertex` suffix to get the logical provider name
-4. Looks up a hardcoded Go map of known models for that logical provider — providers with no catalog entry (e.g., `openrouter`) are silently skipped
+4. Looks up a hardcoded Go map of known models for that logical provider — providers with no catalog entry are silently skipped
 5. Emits model entries as `{providerKey}/{modelName}` with versioned aliases into `agents.defaults.models`
 6. Sets `agents.defaults.model.primary` from the first credential's provider catalog
 
@@ -64,7 +64,7 @@ A dedicated injection function in the reconciliation pipeline, called after prov
 
 A hardcoded Go map defines known models per logical provider name. Catalog ordering matters: each provider's first model should be the best cost/performance option (not the most expensive flagship), since it becomes the default primary when that provider is first in the credentials list.
 
-Providers not in the catalog (e.g., `openrouter`) are silently skipped. OpenRouter is a meta-provider whose model list is too dynamic to hardcode. Users add specific models via `openclaw config patch`.
+Providers not in the catalog are silently skipped. OpenRouter is a meta-provider whose full model list is too dynamic to hardcode, so the operator includes a curated default OpenRouter catalog for common direct models. Fusion is opt-in: when a user declares `openrouter/openrouter/fusion`, the operator adds the Fusion `extraBody` plugin wrapper if missing and preserves user-supplied panel/judge settings. Fusion can have longer response times because OpenRouter may run multiple analysis models plus a final judge/synthesis step. Users add additional OpenRouter models via `openclaw config patch` or `spec.config.raw`.
 
 This naturally handles both direct API and Vertex paths:
 - `type: apiKey, provider: anthropic` → provider key `anthropic` → emits `anthropic/claude-sonnet-4-6`
@@ -136,5 +136,5 @@ PLATFORM.md
 ## Future Considerations
 
 - As new LLM providers and models are released, the hardcoded catalog map will need periodic updates via operator releases
-- OpenRouter and similar meta-providers may eventually warrant dynamic model discovery, but the current escape hatch (`openclaw config patch`) is sufficient
+- OpenRouter and similar meta-providers may eventually warrant dynamic model discovery, but the curated catalog plus the current escape hatches (`spec.config.raw` and `openclaw config patch`) are sufficient
 - The primary-preserving tweak in `merge.js` could be generalized to preserve other user-chosen defaults if the need arises

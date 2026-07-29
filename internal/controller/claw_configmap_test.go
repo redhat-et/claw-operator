@@ -470,7 +470,7 @@ func TestInjectModelCatalog(t *testing.T) {
 		assert.Equal(t, "google/gemini-3.5-flash", model["primary"])
 	})
 
-	t.Run("openrouter emits three-segment model keys", func(t *testing.T) {
+	t.Run("openrouter emits default catalog without fusion", func(t *testing.T) {
 		config := map[string]any{"models": map[string]any{"providers": map[string]any{}}}
 		credentials := []clawv1alpha1.CredentialSpec{
 			{Name: "or", Type: clawv1alpha1.CredentialTypeBearer, Provider: "openrouter", Domain: "openrouter.ai"},
@@ -483,6 +483,7 @@ func TestInjectModelCatalog(t *testing.T) {
 		assert.Contains(t, models, "openrouter/openai/gpt-5.5")
 		assert.Contains(t, models, "openrouter/anthropic/claude-sonnet-4-6")
 		assert.Contains(t, models, "openrouter/google/gemini-3.5-flash")
+		assert.NotContains(t, models, "openrouter/openrouter/fusion")
 		entry := models["openrouter/openai/gpt-5.5"].(map[string]any)
 		assert.Equal(t, "GPT-5.5", entry["alias"])
 
@@ -492,6 +493,171 @@ func TestInjectModelCatalog(t *testing.T) {
 		require.Len(t, fallbacks, 2)
 		assert.Equal(t, "openrouter/anthropic/claude-sonnet-4-6", fallbacks[0])
 		assert.Equal(t, "openrouter/google/gemini-3.5-flash", fallbacks[1])
+	})
+
+	t.Run("openrouter fusion config is added when user declares fusion model", func(t *testing.T) {
+		config := map[string]any{
+			"models": map[string]any{"providers": map[string]any{}},
+			"agents": map[string]any{
+				"defaults": map[string]any{
+					"models": map[string]any{
+						"openrouter/openrouter/fusion": map[string]any{"alias": "OpenRouter Fusion"},
+					},
+				},
+			},
+		}
+		credentials := []clawv1alpha1.CredentialSpec{
+			{Name: "or", Type: clawv1alpha1.CredentialTypeBearer, Provider: "openrouter", Domain: "openrouter.ai"},
+		}
+
+		injectModelCatalog(config, testClawWithCredentials(credentials))
+
+		agents, ok := config["agents"].(map[string]any)
+		require.True(t, ok, "agents should be present")
+		defaults, ok := agents["defaults"].(map[string]any)
+		require.True(t, ok, "agents.defaults should be present")
+		models, ok := defaults["models"].(map[string]any)
+		require.True(t, ok, "agents.defaults.models should be present")
+		fusion, ok := models["openrouter/openrouter/fusion"].(map[string]any)
+		require.True(t, ok, "openrouter fusion model should be present")
+		assert.Equal(t, "OpenRouter Fusion", fusion["alias"])
+		params, ok := fusion["params"].(map[string]any)
+		require.True(t, ok, "fusion params should be present")
+		extraBody, ok := params["extraBody"].(map[string]any)
+		require.True(t, ok, "fusion params.extraBody should be present")
+		plugins, ok := extraBody["plugins"].([]any)
+		require.True(t, ok, "fusion plugins should be present")
+		require.Len(t, plugins, 1)
+		plugin, ok := plugins[0].(map[string]any)
+		require.True(t, ok, "fusion plugin should be an object")
+		assert.Equal(t, "fusion", plugin["id"])
+		assert.NotContains(t, plugin, "analysis_models")
+		assert.NotContains(t, plugin, "model")
+	})
+
+	t.Run("openrouter fusion config preserves user supplied panel", func(t *testing.T) {
+		config := map[string]any{
+			"models": map[string]any{"providers": map[string]any{}},
+			"agents": map[string]any{
+				"defaults": map[string]any{
+					"models": map[string]any{
+						"openrouter/openrouter/fusion": map[string]any{
+							"params": map[string]any{
+								"extraBody": map[string]any{
+									"plugins": []any{
+										map[string]any{
+											"id":              "fusion",
+											"analysis_models": []any{"deepseek/deepseek-v4-pro"},
+											"model":           "google/gemini-3.5-flash",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		credentials := []clawv1alpha1.CredentialSpec{
+			{Name: "or", Type: clawv1alpha1.CredentialTypeBearer, Provider: "openrouter", Domain: "openrouter.ai"},
+		}
+
+		injectModelCatalog(config, testClawWithCredentials(credentials))
+
+		agents, ok := config["agents"].(map[string]any)
+		require.True(t, ok, "agents should be present")
+		defaults, ok := agents["defaults"].(map[string]any)
+		require.True(t, ok, "agents.defaults should be present")
+		models, ok := defaults["models"].(map[string]any)
+		require.True(t, ok, "agents.defaults.models should be present")
+		fusion, ok := models["openrouter/openrouter/fusion"].(map[string]any)
+		require.True(t, ok, "openrouter fusion model should be present")
+		params, ok := fusion["params"].(map[string]any)
+		require.True(t, ok, "fusion params should be present")
+		extraBody, ok := params["extraBody"].(map[string]any)
+		require.True(t, ok, "fusion params.extraBody should be present")
+		plugins, ok := extraBody["plugins"].([]any)
+		require.True(t, ok, "fusion plugins should be present")
+		require.Len(t, plugins, 1)
+		plugin, ok := plugins[0].(map[string]any)
+		require.True(t, ok, "fusion plugin should be an object")
+		assert.Equal(t, "fusion", plugin["id"])
+		assert.Equal(t, []any{"deepseek/deepseek-v4-pro"}, plugin["analysis_models"])
+		assert.Equal(t, "google/gemini-3.5-flash", plugin["model"])
+	})
+
+	t.Run("openrouter fusion config preserves snake case extra body", func(t *testing.T) {
+		config := map[string]any{
+			"models": map[string]any{"providers": map[string]any{}},
+			"agents": map[string]any{
+				"defaults": map[string]any{
+					"models": map[string]any{
+						"openrouter/openrouter/fusion": map[string]any{
+							"params": map[string]any{
+								"extra_body": map[string]any{
+									"metadata": "keep",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		credentials := []clawv1alpha1.CredentialSpec{
+			{Name: "or", Type: clawv1alpha1.CredentialTypeBearer, Provider: "openrouter", Domain: "openrouter.ai"},
+		}
+
+		injectModelCatalog(config, testClawWithCredentials(credentials))
+
+		agents, ok := config["agents"].(map[string]any)
+		require.True(t, ok, "agents should be present")
+		defaults, ok := agents["defaults"].(map[string]any)
+		require.True(t, ok, "agents.defaults should be present")
+		models, ok := defaults["models"].(map[string]any)
+		require.True(t, ok, "agents.defaults.models should be present")
+		fusion, ok := models["openrouter/openrouter/fusion"].(map[string]any)
+		require.True(t, ok, "openrouter fusion model should be present")
+		params, ok := fusion["params"].(map[string]any)
+		require.True(t, ok, "fusion params should be present")
+		assert.NotContains(t, params, "extraBody")
+		extraBody, ok := params["extra_body"].(map[string]any)
+		require.True(t, ok, "fusion params.extra_body should be present")
+		assert.Equal(t, "keep", extraBody["metadata"])
+		plugins, ok := extraBody["plugins"].([]any)
+		require.True(t, ok, "fusion plugins should be present")
+		require.Len(t, plugins, 1)
+		plugin, ok := plugins[0].(map[string]any)
+		require.True(t, ok, "fusion plugin should be an object")
+		assert.Equal(t, "fusion", plugin["id"])
+	})
+
+	t.Run("openrouter fusion config requires openrouter provider", func(t *testing.T) {
+		config := map[string]any{
+			"models": map[string]any{"providers": map[string]any{}},
+			"agents": map[string]any{
+				"defaults": map[string]any{
+					"models": map[string]any{
+						"openrouter/openrouter/fusion": map[string]any{"alias": "OpenRouter Fusion"},
+					},
+				},
+			},
+		}
+		credentials := []clawv1alpha1.CredentialSpec{
+			{Name: "gemini", Type: clawv1alpha1.CredentialTypeAPIKey, Provider: "google", Domain: "generativelanguage.googleapis.com"},
+		}
+
+		injectModelCatalog(config, testClawWithCredentials(credentials))
+
+		agents, ok := config["agents"].(map[string]any)
+		require.True(t, ok, "agents should be present")
+		defaults, ok := agents["defaults"].(map[string]any)
+		require.True(t, ok, "agents.defaults should be present")
+		models, ok := defaults["models"].(map[string]any)
+		require.True(t, ok, "agents.defaults.models should be present")
+		fusion, ok := models["openrouter/openrouter/fusion"].(map[string]any)
+		require.True(t, ok, "openrouter fusion model should be present")
+		assert.Equal(t, "OpenRouter Fusion", fusion["alias"])
+		assert.NotContains(t, fusion, "params")
 	})
 
 	t.Run("primary set from first provider with catalog", func(t *testing.T) {

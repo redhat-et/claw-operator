@@ -54,7 +54,7 @@ A single `knownProviders` map of `providerDefaults` structs in `claw_providers.g
 | `VertexPlugin` | ClawHub package required for Vertex SDK path | `@openclaw/anthropic-vertex-provider` |
 | `Models` | Model catalog entries (name + alias) | `[{claude-sonnet-4-6, Claude Sonnet 4.6}, ...]` |
 
-Providers not in the registry (e.g., `openrouter`, custom self-hosted endpoints) still work — they just get no defaults, no API override (OpenClaw defaults to `openai-completions`), and no model catalog.
+Providers not in the registry (e.g., custom self-hosted endpoints) still work — they just get no defaults, no API override (OpenClaw defaults to `openai-completions`), and no model catalog. `openrouter` is a known provider and gets bearer auth, `openrouter.ai`, `/api/v1`, and a built-in catalog for common direct models. Fusion is opt-in: when a user declares `openrouter/openrouter/fusion`, the operator adds the Fusion `extraBody` plugin wrapper if missing and preserves user-supplied panel/judge settings. Fusion can have longer response times because OpenRouter may run multiple analysis models plus a final judge/synthesis step.
 
 ### Builder function
 
